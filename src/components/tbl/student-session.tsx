@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { api, removeStudentSession, usePoll } from '@/lib/tbl-client'
 import { PHASE_INFO, type StudentStateDTO } from '@/lib/tbl-types'
+import { gradeForStudentSelf, fmtNote } from '@/lib/grades'
 import { cn } from '@/lib/utils'
 import { ChoiceButton, choiceLetter, InfoCard, PhaseBadge } from './shared'
 import { IratQuiz, TratQuiz, AppealView, ApplicationView, PeerView } from './student-quizzes'
@@ -254,6 +255,7 @@ function FeedbackView({ data }: { data: StudentStateDTO }) {
 function FinishedView({ data, onExit }: { data: StudentStateDTO; onExit: () => void }) {
   const myScore = data.myIratAnswers.reduce((s, a) => s + (a.score ?? 0), 0)
   const teamScore = data.teamTratAnswers.reduce((s, a) => s + a.score, 0)
+  const grade = gradeForStudentSelf(data)
 
   return (
     <div className="space-y-4">
@@ -266,6 +268,42 @@ function FinishedView({ data, onExit }: { data: StudentStateDTO; onExit: () => v
           Merci pour votre participation. Voici le récapitulatif de vos résultats.
         </p>
       </div>
+
+      {/* Note finale sur 20 */}
+      {grade.final !== null && (
+        <div className="rounded-2xl border-2 border-stone-800 bg-stone-900 p-5 text-center shadow-lg">
+          <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">
+            Ma note finale
+          </p>
+          <p className="mt-1 text-5xl font-black text-white">
+            {fmtNote(grade.final)}
+            <span className="text-xl font-bold text-stone-400"> / 20</span>
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2 text-left sm:grid-cols-4">
+            {(
+              [
+                ['iRAT', grade.irat, '25 %'],
+                ['tRAT', grade.trat, '25 %'],
+                ['Application', grade.application, '35 %'],
+                ['Pairs', grade.peer, '15 %'],
+              ] as const
+            ).map(([label, c, w]) => (
+              <div key={label} className="rounded-xl bg-stone-800 p-2.5 text-center">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                  {label} · {w}
+                </p>
+                <p className="text-lg font-bold text-white">{fmtNote(c.note)}</p>
+                <p className="text-[10px] text-stone-400">{c.detail}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[10px] leading-relaxed text-stone-400">
+            Chaque partie est ramenée sur 20 puis pondérée (iRAT 25 % · tRAT 25 % · application
+            35 % · évaluation par les pairs 15 %). Une partie manquante est remplacée par les
+            autres au prorata.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-2xl border border-stone-200 bg-white p-4 text-center">

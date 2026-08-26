@@ -37,6 +37,21 @@ export async function POST(req: NextRequest) {
       .map((q) => sanitizeQuestionInput(q))
       .filter((q): q is NonNullable<ReturnType<typeof sanitizeQuestionInput>> => q !== null)
 
+    // Numérotation par phase : les questions iRAT/tRAT et les exercices
+    // d'application sont numérotés indépendamment (0,1,2… dans chaque liste).
+    const counters: Record<string, number> = {}
+    const questionData = questions.map((q) => {
+      const order = counters[q.phase] ?? 0
+      counters[q.phase] = order + 1
+      return {
+        text: q.text,
+        choices: JSON.stringify(q.choices),
+        correct: q.correct,
+        phase: q.phase,
+        order,
+      }
+    })
+
     const code = await generateUniqueCode()
     const teacherToken = randomToken()
 
@@ -54,13 +69,7 @@ export async function POST(req: NextRequest) {
           })),
         },
         questions: {
-          create: questions.map((q, i) => ({
-            text: q.text,
-            choices: JSON.stringify(q.choices),
-            correct: q.correct,
-            phase: q.phase,
-            order: i,
-          })),
+          create: questionData,
         },
       },
     })

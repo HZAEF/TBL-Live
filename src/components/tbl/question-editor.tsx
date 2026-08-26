@@ -17,12 +17,14 @@ export function QuestionEditor({
   onChange,
   onDelete,
   errors,
+  prefix = 'Question',
 }: {
   index: number
   value: DraftQuestion
   onChange: (q: DraftQuestion) => void
   onDelete?: () => void
   errors?: string[]
+  prefix?: string
 }) {
   const setChoice = (i: number, v: string) => {
     const choices = [...value.choices]
@@ -53,7 +55,9 @@ export function QuestionEditor({
       )}
     >
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-sm font-bold text-stone-800">Question {index + 1}</p>
+        <p className="text-sm font-bold text-stone-800">
+          {prefix} {index + 1}
+        </p>
         <div className="flex items-center gap-2">
           <div className="flex overflow-hidden rounded-lg border border-stone-300 text-xs font-semibold">
             <button

@@ -40,7 +40,9 @@ L'application vous guide étape par étape. Le bouton vert en bas passe d'une é
 | 8. Terminé | Exportez le CSV pour vos notes | Ils voient leur bilan |
 
 ### Après la séance
-- Onglet **« Résultats »** → bouton **« Exporter tous les résultats (CSV) »** : un fichier Excel avec tout (iRAT, tRAT, application, évaluation par les pairs, réclamations, commentaires).
+- Onglet **« Résultats »** → tableau **« Note finale sur 20 »** en haut de la page : chaque étudiant voit sa note globale combinant **iRAT 25 % · tRAT 25 % · application 35 % · évaluation par les pairs 15 %**. Chaque partie est d'abord ramenée sur 20 (iRAT : 1 point par bonne réponse ; tRAT : barème 4/2/1/0 ; application : bonnes réponses de l'équipe ; pairs : moyenne reçue sur 5). Si une partie n'existe pas (aucun exercice d'application, évaluation manquante…), son poids est automatiquement redistribué sur les autres.
+- Les étudiants voient **leur propre note finale** sur l'écran de fin de séance, avec le détail des quatre parties.
+- Bouton **« Exporter tous les résultats (CSV) »** : un fichier Excel avec tout (détail question par question, notes /20 de chaque partie, note finale, réclamations, commentaires).
 - Pour reprendre une séance : **« Reprendre une séance »** avec le code + votre PIN.
 
 ---
@@ -56,8 +58,64 @@ L'icône apparaît alors comme une vraie application, en plein écran.
 
 ---
 
+## 3. Héberger l'application GRATUITEMENT et définitivement
 
-## 3. Questions fréquentes
+L'application fonctionne déjà dans l'aperçu. Pour en disposer **en permanence**, hébergez-la gratuitement sur **Vercel** (avec une base de données **Neon**, gratuite elle aussi). Comptez **30 à 40 minutes**, une seule fois. Aucune connaissance technique n'est nécessaire : suivez simplement les clics.
+
+### Étape A — Créer un compte GitHub (2 min)
+1. Allez sur **https://github.com/signup**.
+2. Créez votre compte (email + mot de passe).
+
+### Étape B — Déposer le code sur GitHub (5 min)
+1. Connectez-vous, cliquez en haut à droite sur **« + »** → **« New repository »**.
+2. Nommez-le par exemple `tbl-live`, laissez tout par défaut, cliquez **« Create repository »**.
+3. Sur la page suivante, cliquez sur **« uploading an existing file »** (lien au-dessus de la zone vide).
+4. Glissez-déposez le **contenu du dossier décompressé** `tbl-live-source.zip` (tous les fichiers et dossiers, mais **pas** le dossier `node_modules` s'il apparaît).
+5. Cliquez sur **« Commit changes »**.
+
+### Étape C — Créer la base de données gratuite sur Neon (5 min)
+1. Allez sur **https://neon.com** → **« Sign up »** (avec GitHub, c'est le plus simple).
+2. Dans votre espace : **« Create project »** → nommez-le `tbl-live` → région au plus près de chez vous → **« Create »**.
+3. Sur la page du projet, cherchez la **chaîne de connexion** (bouton **« Connect »** ou « Connection string »). Elle ressemble à :
+   `postgresql://neondb_owner:xxxx@ep-xxx.eu-central-1.aws.neon.tech/neondb?sslmode=require`
+4. **Copiez-la** et gardez-la (elle servira à l'étape E).
+
+### Étape D — Modifier UNE ligne pour la base de données (2 min)
+1. Sur GitHub, dans votre dépôt, ouvrez le dossier **`prisma`** puis cliquez sur le fichier **`schema.prisma`**.
+2. Cliquez sur le crayon ✏️ (modifier). Trouvez la ligne :
+   ```
+   provider = "sqlite"
+   ```
+   et remplacez-la par :
+   ```
+   provider = "postgresql"
+   ```
+3. Cliquez sur **« Commit changes »** (en bas de page).
+
+### Étape E — Déployer sur Vercel (10 min)
+1. Allez sur **https://vercel.com** → **« Sign Up »** → **« Continue with GitHub »**.
+2. Cliquez sur **« Add New… »** → **« Project »**.
+3. Votre dépôt `tbl-live` apparaît : cliquez **« Import »**.
+4. **Avant de déployer**, ouvrez la section **« Environment Variables »** et ajoutez :
+   - **Key** (nom) : `DATABASE_URL`
+   - **Value** (valeur) : la chaîne de connexion Neon copiée à l'étape C.
+   - Cliquez **« Add »**.
+5. Cliquez sur **« Deploy »** et attendez 2-3 minutes.
+6. 🎉 Votre application est en ligne ! Vercel vous donne une adresse du type
+   `https://tbl-live-xxxx.vercel.app` — c'est **cette adresse** que vous donnerez à vos étudiants.
+
+### Étape F — Vérifier (2 min)
+1. Ouvrez l'adresse Vercel : l'application doit s'afficher.
+2. Créez une séance de test, puis vérifiez dans Neon que les tables sont apparues.
+
+### Coût : 0 €
+- **Vercel Hobby** : gratuit pour un usage personnel/éducatif.
+- **Neon Free** : gratuit jusqu'à 0,5 Go de stockage (des années de séances TBL).
+- Aucune carte bancaire n'est demandée.
+
+---
+
+## 4. Questions fréquentes
 
 **Un étudiant a perdu sa connexion ?** Il rouvre l'application, saisit le même code et **le même nom** : il retrouve son équipe et ses réponses.
 
@@ -68,3 +126,17 @@ L'icône apparaît alors comme une vraie application, en plein écran.
 **Un étudiant arrive en retard pendant le iRAT ?** Il peut répondre tant que la phase est ouverte. Vous pouvez aussi revenir à une phase précédente (cliquez sur son numéro dans le fil des étapes en haut du tableau de bord).
 
 **Combien d'étudiants ?** L'application est conçue pour des classes de 5 à 150 étudiants. Pour de très grandes classes, le rafraîchissement peut être légèrement moins instantané (toutes les 2,5 s).
+
+**Les données sont-elles privées ?** Les séances ne sont accessibles qu'avec le code à 6 caractères. N'utilisez pas de données sensibles dans les questions. Aucune donnée n'est partagée avec des tiers.
+
+---
+
+## 5. Pour les curieux : la technologie
+
+- **Next.js 16** (React 19, TypeScript) — application web
+- **Prisma + PostgreSQL** (Neon) — base de données
+- **Tailwind CSS + shadcn/ui** — interface
+- **PWA** (manifest + icônes) — installation sur mobile sans magasin d'applications
+- Interface 100 % en français, pensée mobile d'abord
+
+Bonne séance TBL ! 🎓

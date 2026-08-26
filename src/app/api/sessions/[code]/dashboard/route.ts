@@ -22,7 +22,9 @@ export async function GET(
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
-          orderBy: [{ phase: 'asc' }, { order: 'asc' }],
+          // Tri : questions iRAT/tRAT d'abord, puis exercices d'application,
+          // chacun dans l'ordre défini par l'enseignant (champ order).
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
         }),
         db.team.findMany({ where: { sessionId: session.id }, orderBy: { number: 'asc' } }),
         db.student.findMany({
@@ -69,6 +71,11 @@ export async function GET(
           },
         }),
       ])
+
+    // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
+    // la numérotation affichée correspond ainsi à l'ordre réel du déroulé TBL.
+    const phaseRank = (p: string) => (p === 'application' ? 1 : 0)
+    questions.sort((a, b) => phaseRank(a.phase) - phaseRank(b.phase) || a.order - b.order)
 
     return NextResponse.json({
       session: {

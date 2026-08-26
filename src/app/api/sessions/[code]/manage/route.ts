@@ -2,6 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionByCode, PHASES, sanitizeQuestionInput } from '@/lib/tbl'
 
+// Renumérote les questions d'une phase (rat ou application) : 0, 1, 2, …
+// Garantit un ordre stable et sans doublons après une suppression ou un
+// changement de phase.
+async function renumberPhase(sessionId: string, phase: string) {
+  const list = await db.question.findMany({
+    where: { sessionId, phase },
+    orderBy: [{ order: 'asc' }, { id: 'asc' }],
+  })
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].order !== i) {
+      await db.question.update({ where: { id: list[i].id }, data: { order: i } })
+    }
+  }
+}
+
 // POST /api/sessions/[code]/manage — actions de l'enseignant
 export async function POST(
   req: NextRequest,
@@ -61,7 +76,9 @@ export async function POST(
             { status: 400 }
           )
         }
-        const count = await db.question.count({ where: { sessionId: session.id } })
+        const count = await db.question.count({
+          where: { sessionId: session.id, phase: q.phase },
+        })
         if (count >= 60) {
           return NextResponse.json({ error: 'Maximum de 60 questions par séance.' }, { status: 400 })
         }
@@ -72,6 +89,8 @@ export async function POST(
             choices: JSON.stringify(q.choices),
             correct: q.correct,
             phase: q.phase,
+            // Ordre compté DANS la phase : les questions iRAT/tRAT et les
+            // exercices d'application sont numérotés indépendamment.
             order: count,
           },
         })
@@ -92,8 +111,19 @@ export async function POST(
         }
         await db.question.update({
           where: { id },
-          data: { text: q.text, choices: JSON.stringify(q.choices), correct: q.correct },
+          data: {
+            text: q.text,
+            choices: JSON.stringify(q.choices),
+            correct: q.correct,
+            phase: q.phase,
+          },
         })
+        // Si la question change de phase (rat ↔ application), on renumérote
+        // les deux listes pour garder des ordres consécutifs sans doublons.
+        if (q.phase !== existing.phase) {
+          await renumberPhase(session.id, existing.phase)
+          await renumberPhase(session.id, q.phase)
+        }
         return NextResponse.json({ ok: true })
       }
 
@@ -107,6 +137,9 @@ export async function POST(
           return NextResponse.json({ error: 'Question introuvable.' }, { status: 404 })
         }
         await db.question.delete({ where: { id } })
+        // Renumérotation de la phase concernée : ordres consécutifs 0,1,2…
+        // (évite tout risque d'égalité d'ordre → tri toujours stable)
+        await renumberPhase(session.id, existing.phase)
         return NextResponse.json({ ok: true })
       }
 

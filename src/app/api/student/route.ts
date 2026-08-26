@@ -156,6 +156,18 @@ export async function GET(req: NextRequest) {
         select: { evaluatedId: true, score: true, comment: true },
       })
       response.myPeerEvals = myPeerEvals
+      // Moyenne des notes reçues (utile à l'écran de fin pour la note finale)
+      const receivedEvals = await db.peerEval.findMany({
+        where: { evaluatedId: student.id },
+        select: { score: true },
+      })
+      response.myPeerReceived =
+        receivedEvals.length > 0
+          ? {
+              avg: receivedEvals.reduce((s, e) => s + e.score, 0) / receivedEvals.length,
+              count: receivedEvals.length,
+            }
+          : null
     }
 
     return NextResponse.json(response)

@@ -299,9 +299,12 @@ export function TeacherDashboard({
             <AlertDialogDescription asChild>
               <div className="space-y-2">
                 <p>{pendingPhase ? PHASE_INFO[pendingPhase].teacherHint : ''}</p>
-                {pendingPhase && PHASE_WARNING[pendingPhase] && (
-                  <p className="font-medium text-amber-700">{PHASE_WARNING[pendingPhase]}</p>
-                )}
+                {/* Avertissement sur la phase que l'on QUITTE (et non celle où l'on va) */}
+                {pendingPhase &&
+                  PHASE_ORDER.indexOf(pendingPhase) > PHASE_ORDER.indexOf(status) &&
+                  PHASE_WARNING[status] && (
+                    <p className="font-medium text-amber-700">{PHASE_WARNING[status]}</p>
+                  )}
                 {pendingPhase && PHASE_ORDER.indexOf(pendingPhase) < PHASE_ORDER.indexOf(status) && (
                   <p className="font-medium text-red-700">
                     Attention : vous revenez à une phase déjà terminée. Les étudiants pourront
@@ -340,6 +343,8 @@ const NEXT_LABEL: Record<Phase, string | null> = {
   finished: null,
 }
 
+// Avertissements affichés au moment de QUITTER une phase (ils décrivent
+// ce que les étudiants ne pourront plus faire une fois la phase passée).
 const PHASE_WARNING: Partial<Record<Phase, string>> = {
   irat: 'Les étudiants ne pourront plus répondre à l\u2019iRAT une fois la phase passée. Vérifiez que tout le monde a terminé.',
   trat: 'Une fois le tRAT terminé, les équipes ne pourront plus répondre. Vérifiez que toutes les équipes ont fini.',

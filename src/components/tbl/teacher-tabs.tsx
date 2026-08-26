@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import type { DashboardDTO } from '@/lib/tbl-types'
+import { gradeForStudent, fmtNote } from '@/lib/grades'
 import { choiceLetter } from './shared'
 import { QuestionEditor, emptyQuestion } from './question-editor'
 import type { DraftQuestion } from '@/lib/tbl-types'
@@ -193,6 +194,8 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
   const hasAnswers =
     data.iratAnswers.length > 0 || data.tratAnswers.length > 0 || data.appAnswers.length > 0
   const [newQ, setNewQ] = useState<DraftQuestion | null>(null)
+  const ratQs = data.questions.filter((q) => q.phase === 'rat')
+  const appQs = data.questions.filter((q) => q.phase === 'application')
 
   return (
     <div className="space-y-4">
@@ -204,25 +207,61 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
         </p>
       )}
 
-      {data.questions.length === 0 && !newQ && (
-        <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
-          Aucune question pour le moment. Ajoutez votre première question ci-dessous.
-        </p>
-      )}
+      <p className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
+        Les questions sont réparties en deux listes indépendantes : les questions de préparation
+        (utilisées pour l&apos;iRAT <em>puis</em> le tRAT) et les exercices d&apos;application.
+        Chaque liste a sa propre numérotation — c&apos;est aussi celle des résultats.
+      </p>
 
-      <div className="space-y-3">
-        {data.questions.map((q, i) => (
+      {/* --- Questions iRAT / tRAT --- */}
+      <section className="space-y-3">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
+          <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-white">
+            iRAT / tRAT
+          </span>
+          {ratQs.length} question{ratQs.length > 1 ? 's' : ''} de préparation
+        </h3>
+        {ratQs.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 p-4 text-center text-sm text-stone-500">
+            Aucune question de préparation. Elles sont indispensables pour lancer l&apos;iRAT.
+          </p>
+        )}
+        {ratQs.map((q, i) => (
           <ExistingQuestionEditor key={q.id} index={i} question={q} manage={manage} />
         ))}
-      </div>
+      </section>
+
+      {/* --- Exercices d'application --- */}
+      <section className="space-y-3">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
+          <span className="rounded-full bg-lime-600 px-2.5 py-0.5 text-xs font-bold text-white">
+            Application
+          </span>
+          {appQs.length} exercice{appQs.length > 1 ? 's' : ''} d&apos;application
+        </h3>
+        {appQs.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-lime-300 bg-lime-50/50 p-4 text-center text-sm text-stone-500">
+            Aucun exercice d&apos;application pour le moment. Ils sont résolus en équipe après le
+            feedback, avec révélation simultanée des réponses.
+          </p>
+        )}
+        {appQs.map((q, i) => (
+          <ExistingQuestionEditor key={q.id} index={i} question={q} manage={manage} prefix="Exercice" />
+        ))}
+      </section>
 
       {newQ ? (
         <div className="space-y-2 rounded-2xl border-2 border-emerald-300 bg-emerald-50/50 p-3">
           <QuestionEditor
-            index={data.questions.length}
+            index={
+              newQ.phase === 'rat'
+                ? ratQs.length
+                : appQs.length
+            }
             value={newQ}
             onChange={setNewQ}
             onDelete={() => setNewQ(null)}
+            prefix={newQ.phase === 'rat' ? 'Question' : 'Exercice'}
           />
           <Button
             className="h-11 w-full bg-emerald-600 hover:bg-emerald-700"
@@ -236,14 +275,24 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           </Button>
         </div>
       ) : (
-        <Button
-          variant="outline"
-          className="h-11 w-full border-dashed border-stone-400 text-stone-600"
-          onClick={() => setNewQ(emptyQuestion())}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          Ajouter une question
-        </Button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Button
+            variant="outline"
+            className="h-11 border-dashed border-amber-400 text-stone-700 hover:bg-amber-50"
+            onClick={() => setNewQ(emptyQuestion('rat'))}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Question iRAT / tRAT
+          </Button>
+          <Button
+            variant="outline"
+            className="h-11 border-dashed border-lime-500 text-stone-700 hover:bg-lime-50"
+            onClick={() => setNewQ(emptyQuestion('application'))}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Exercice d&apos;application
+          </Button>
+        </div>
       )}
     </div>
   )
@@ -253,10 +302,12 @@ function ExistingQuestionEditor({
   index,
   question,
   manage,
+  prefix,
 }: {
   index: number
   question: DashboardDTO['questions'][number]
   manage: ManageFn
+  prefix?: string
 }) {
   const [draft, setDraft] = useState<DraftQuestion>({
     text: question.text,
@@ -275,6 +326,7 @@ function ExistingQuestionEditor({
         index={index}
         value={draft}
         onChange={setDraft}
+        prefix={prefix ?? (question.phase === 'application' ? 'Exercice' : 'Question')}
         onDelete={() => {
           if (window.confirm('Supprimer cette question ? Ses réponses seront aussi supprimées.')) {
             manage('delete_question', { id: question.id })
@@ -315,6 +367,9 @@ export function ResultsTab({
   }
   return (
     <div className="space-y-6">
+      {/* Note finale sur 20 */}
+      <FinalGradesSection data={data} finished={data.session.status === 'finished'} />
+
       {/* iRAT */}
       {ratQs.length > 0 && (
         <ResultSection title="Test individuel (iRAT) — 1 point par bonne réponse">
@@ -561,9 +616,99 @@ function ResultSection({ title, children }: { title: string; children: React.Rea
   )
 }
 
+// ================= Note finale sur 20 =================
+
+function noteTone(note: number | null): string {
+  if (note === null) return 'bg-stone-100 text-stone-500'
+  if (note >= 16) return 'bg-emerald-100 text-emerald-700'
+  if (note >= 12) return 'bg-lime-100 text-lime-700'
+  if (note >= 10) return 'bg-amber-100 text-amber-700'
+  return 'bg-red-100 text-red-700'
+}
+
+function FinalGradesSection({ data, finished }: { data: DashboardDTO; finished: boolean }) {
+  const grades = data.students.map((s) => ({ s, g: gradeForStudent(data, s.id) }))
+  const anyGrade = grades.some(({ g }) => g.final !== null)
+  if (!anyGrade) return null
+
+  return (
+    <ResultSection title="Note finale sur 20 — iRAT 25 % · tRAT 25 % · Application 35 % · Pairs 15 %">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
+            <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
+              <th className="py-2 pr-3 font-medium">Étudiant</th>
+              <th className="py-2 pr-3 font-medium">Équipe</th>
+              <th className="py-2 px-1.5 text-center font-medium">
+                iRAT
+                <span className="block text-[10px] font-normal">25 %</span>
+              </th>
+              <th className="py-2 px-1.5 text-center font-medium">
+                tRAT
+                <span className="block text-[10px] font-normal">25 %</span>
+              </th>
+              <th className="py-2 px-1.5 text-center font-medium">
+                Application
+                <span className="block text-[10px] font-normal">35 %</span>
+              </th>
+              <th className="py-2 px-1.5 text-center font-medium">
+                Pairs
+                <span className="block text-[10px] font-normal">15 %</span>
+              </th>
+              <th className="py-2 pl-3 text-center font-medium">Note finale</th>
+            </tr>
+          </thead>
+          <tbody>
+            {grades.map(({ s, g }) => {
+              const team = data.teams.find((t) => t.id === s.teamId)
+              return (
+                <tr key={s.id} className="border-b border-stone-100">
+                  <td className="py-2 pr-3 font-medium text-stone-800">{s.name}</td>
+                  <td className="py-2 pr-3 text-xs text-stone-500">{team?.name ?? '—'}</td>
+                  {([g.irat, g.trat, g.application, g.peer] as const).map((c, i) => (
+                    <td key={i} className="py-2 px-1.5 text-center">
+                      <span className="font-semibold text-stone-800">{fmtNote(c.note)}</span>
+                      <span className="block text-[10px] text-stone-400">{c.detail}</span>
+                    </td>
+                  ))}
+                  <td className="py-2 pl-3 text-center">
+                    <span
+                      className={cn(
+                        'inline-flex min-w-[3.5rem] justify-center rounded-full px-2.5 py-1 text-sm font-bold',
+                        noteTone(g.final)
+                      )}
+                    >
+                      {fmtNote(g.final)}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-stone-500">
+        Chaque composante est d&apos;abord ramenée sur 20 (iRAT : 1 point par bonne réponse ; tRAT :
+        barème 4/2/1/0 ; application : réponses correctes de l&apos;équipe ; pairs : moyenne reçue
+        sur 5). Si une composante est indisponible — par exemple aucun exercice
+        d&apos;application ou aucune évaluation reçue — son poids est automatiquement redistribué
+        sur les autres (colonne « — »).{' '}
+        {!finished && (
+          <span className="font-medium text-amber-700">
+            Séance en cours : ces notes sont provisoires.
+          </span>
+        )}
+      </p>
+    </ResultSection>
+  )
+}
+
 // ================= Onglet RÉCLAMATIONS =================
 
 export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: ManageFn }) {
+  // Les réclamations portent toujours sur les questions RAT (iRAT/tRAT) :
+  // on numérote donc dans cette liste, pas dans la liste complète.
+  const ratQs = data.questions.filter((q) => q.phase === 'rat')
   if (data.appeals.length === 0) {
     return (
       <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
@@ -580,8 +725,8 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
       </p>
       {data.appeals.map((a) => {
         const team = data.teams.find((t) => t.id === a.teamId)
-        const question = data.questions.find((q) => q.id === a.questionId)
-        const qi = question ? data.questions.indexOf(question) + 1 : '?'
+        const question = ratQs.find((q) => q.id === a.questionId)
+        const qi = question ? ratQs.indexOf(question) + 1 : '?'
         return (
           <div key={a.id} className="rounded-2xl border border-stone-200 bg-white p-4">
             <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -657,7 +802,7 @@ export function exportCsv(
   const rows: string[] = []
 
   // Tableau 1 : résultats par étudiant
-  rows.push(['Étudiant', 'Équipe', ...ratQs.map((_, i) => `iRAT Q${i + 1}`), 'iRAT total', 'tRAT équipe (total)', ...appQs.map((_, i) => `Application ex.${i + 1}`), 'Note pairs (moyenne /5)'].map(esc).join(';'))
+  rows.push(['Étudiant', 'Équipe', ...ratQs.map((_, i) => `iRAT Q${i + 1}`), 'iRAT total', 'tRAT équipe (total)', ...appQs.map((_, i) => `Application ex.${i + 1}`), 'Note pairs (moyenne /5)', 'iRAT /20 (25%)', 'tRAT /20 (25%)', 'Application /20 (35%)', 'Pairs /20 (15%)', 'NOTE FINALE /20'].map(esc).join(';'))
   for (const s of data.students) {
     const team = data.teams.find((t) => t.id === s.teamId)
     const iratCells = ratQs.map((q) => {
@@ -681,7 +826,13 @@ export function exportCsv(
       received.length > 0
         ? (received.reduce((sum, e) => sum + e.score, 0) / received.length).toFixed(1)
         : ''
-    rows.push([s.name, team?.name ?? '', ...iratCells, `${iratTotal}/${ratQs.length}`, `${tratTotal}/${ratQs.length * 4}`, ...appCells, peerAvg].map(esc).join(';'))
+    // Notes finales sur 20 (avec virgule décimale, Excel FR)
+    const g = gradeForStudent(data, s.id)
+    const cells = [g.irat, g.trat, g.application, g.peer].map((c) =>
+      c.note === null ? '' : c.note.toFixed(2).replace('.', ',')
+    )
+    const finalCell = g.final === null ? '' : g.final.toFixed(2).replace('.', ',')
+    rows.push([s.name, team?.name ?? '', ...iratCells, `${iratTotal}/${ratQs.length}`, `${tratTotal}/${ratQs.length * 4}`, ...appCells, peerAvg, ...cells, finalCell].map(esc).join(';'))
   }
 
   rows.push('')

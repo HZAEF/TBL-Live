@@ -96,6 +96,8 @@ export interface StudentStateDTO {
   iratStats?: { questionId: string; percent: number }[]
   allTeamAppAnswers?: { teamName: string; questionId: string; choice: number; text: string | null }[]
   myPeerEvals?: { evaluatedId: string; score: number; comment: string | null }[]
+  /** Moyenne des évaluations reçues de mes coéquipiers (sur 5) — en fin de séance */
+  myPeerReceived?: { avg: number; count: number } | null
 }
 
 export interface DraftQuestion {
