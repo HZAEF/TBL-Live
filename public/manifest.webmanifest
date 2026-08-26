@@ -1,0 +1,23 @@
+{
+  "name": "TBL Live — Team-Based Learning",
+  "short_name": "TBL Live",
+  "description": "Application d'apprentissage en équipe (Team-Based Learning) : tests individuels, tests en équipe, réclamations, exercices d'application et évaluation par les pairs.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fafaf9",
+  "theme_color": "#059669",
+  "lang": "fr",
+  "categories": ["education"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
