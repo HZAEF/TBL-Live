@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { generateUniqueCode, randomToken, isValidPin, sanitizeQuestionInput } from '@/lib/tbl'
+import {
+  generateUniqueCode,
+  randomToken,
+  isValidPin,
+  sanitizeQuestionInput,
+  sanitizeCaseInput,
+} from '@/lib/tbl'
 
 // POST /api/sessions — création d'une séance TBL
 export async function POST(req: NextRequest) {
@@ -37,9 +43,25 @@ export async function POST(req: NextRequest) {
       .map((q) => sanitizeQuestionInput(q))
       .filter((q): q is NonNullable<ReturnType<typeof sanitizeQuestionInput>> => q !== null)
 
+    // Cas cliniques d'application : chacun contient 3 à 5 QCU affichées
+    // ensemble, un cas à la fois. Le titre est requis ; à défaut on le fixe
+    // côté client (« Application N »).
+    const rawCases = Array.isArray(body.cases) ? body.cases : []
+    const cases = rawCases
+      .map((c, i) => {
+        const sane = sanitizeCaseInput(c)
+        if (sane) return sane
+        // Repli : titre par défaut si seul le titre manque
+        const retry = sanitizeCaseInput({ ...c, title: `Application ${i + 1}` })
+        return retry
+      })
+      .filter((c): c is NonNullable<ReturnType<typeof sanitizeCaseInput>> => c !== null)
+
     // Numérotation par phase : les questions iRAT/tRAT et les exercices
     // d'application sont numérotés indépendamment (0,1,2… dans chaque liste).
-    const counters: Record<string, number> = {}
+    // Les QCU d'un cas sont numérotées dans le cas ; les exercices « libres »
+    // (ancien format, sans cas) gardent une numérotation globale d'application.
+    const counters: Record<string, number> = { rat: 0, application: 0 }
     const questionData = questions.map((q) => {
       const order = counters[q.phase] ?? 0
       counters[q.phase] = order + 1
@@ -73,6 +95,31 @@ export async function POST(req: NextRequest) {
         },
       },
     })
+
+    // Cas cliniques : créés après la séance car chaque QCU doit référencer
+    // explicitement la séance (l'imbrication Prisma ne propage que le cas,
+    // pas la séance « grand-parente »).
+    for (let ci = 0; ci < cases.length; ci++) {
+      const c = cases[ci]
+      await db.case.create({
+        data: {
+          sessionId: session.id,
+          title: c.title,
+          intro: c.intro,
+          order: ci,
+          questions: {
+            create: c.questions.map((q, qi) => ({
+              sessionId: session.id,
+              text: q.text,
+              choices: JSON.stringify(q.choices),
+              correct: q.correct,
+              phase: 'application' as const,
+              order: qi,
+            })),
+          },
+        },
+      })
+    }
 
     return NextResponse.json({ code: session.code, teacherToken })
   } catch (e) {

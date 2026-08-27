@@ -18,12 +18,16 @@ export async function GET(
       return NextResponse.json({ error: 'Accès refusé. Reconnectez-vous.' }, { status: 401 })
     }
 
-    const [questions, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals] =
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
           // Tri : questions iRAT/tRAT d'abord, puis exercices d'application,
           // chacun dans l'ordre défini par l'enseignant (champ order).
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
+        }),
+        db.case.findMany({
+          where: { sessionId: session.id },
           orderBy: [{ order: 'asc' }, { id: 'asc' }],
         }),
         db.team.findMany({ where: { sessionId: session.id }, orderBy: { number: 'asc' } }),
@@ -95,8 +99,20 @@ export async function GET(
         correct: q.correct,
         phase: q.phase,
         order: q.order,
+        caseId: q.caseId,
       })),
-      teams: teams.map((t) => ({ id: t.id, name: t.name, number: t.number })),
+      cases: cases.map((c) => ({
+        id: c.id,
+        title: c.title,
+        intro: c.intro,
+        order: c.order,
+      })),
+      teams: teams.map((t) => ({
+        id: t.id,
+        name: t.name,
+        number: t.number,
+        appealsDone: t.appealsDone,
+      })),
       students,
       iratAnswers,
       tratAnswers,

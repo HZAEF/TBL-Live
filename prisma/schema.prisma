@@ -28,8 +28,24 @@ model Session {
   teams    Team[]
   students Student[]
   questions Question[]
+  cases    Case[]
   appeals  Appeal[]
   peerEvals PeerEval[]
+}
+
+// Cas clinique d'application : un énoncé + 3 à 5 QCU résolues en équipe.
+// L'affichage étudiant se fait un cas à la fois.
+model Case {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title     String  // ex. « Cas clinique — Mme A., 62 ans »
+  intro     String? // énoncé / vignette du cas
+  order     Int     @default(0)
+
+  questions Question[]
+
+  @@index([sessionId])
 }
 
 model Team {
@@ -38,6 +54,9 @@ model Team {
   session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   name      String // "Équipe 1", ...
   number    Int
+  // L'équipe a signalé qu'elle n'a (plus) de réclamation : quand toutes les
+  // équipes actives ont répondu, la phase passe automatiquement au feedback.
+  appealsDone Boolean @default(false)
 
   students   Student[]
   answers    Answer[] // réponses tRAT (par équipe)
@@ -72,6 +91,8 @@ model Question {
   correct   Int // index de la bonne réponse
   phase     String  @default("rat") // rat (iRAT + tRAT) | application
   order     Int     @default(0)
+  caseId    String? // cas clinique d'application (null = ancien format / question RAT)
+  case      Case?   @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   answers    Answer[]
   appeals    Appeal[]

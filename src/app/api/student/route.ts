@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { parseChoices } from '@/lib/tbl'
+import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
 
 // GET /api/student?token= — état complet de l'étudiant selon la phase en cours
 export async function GET(req: NextRequest) {
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
     const session = student.session
     const status = session.status
 
-    const [teamMembers, ratQuestions, appQuestions, myIratAnswers, teamTratAnswers, myAppeals, teamAppAnswers, allAppAnswers] =
+    const [teamMembers, ratQuestions, appQuestions, cases, myIratAnswers, teamTratAnswers, myAppeals, teamAppAnswers, allStudents, allAppAnswersRaw] =
       await Promise.all([
         student.teamId
           ? db.student.findMany({
@@ -40,6 +41,10 @@ export async function GET(req: NextRequest) {
           where: { sessionId: session.id, phase: 'application' },
           orderBy: [{ order: 'asc' }],
         }),
+        db.case.findMany({
+          where: { sessionId: session.id },
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
+        }),
         db.answer.findMany({
           where: { studentId: student.id, kind: 'irat', question: { phase: 'rat' } },
         }),
@@ -55,26 +60,50 @@ export async function GET(req: NextRequest) {
         student.teamId
           ? db.appAnswer.findMany({ where: { teamId: student.teamId } })
           : Promise.resolve([]),
-        session.revealed && student.teamId
-          ? db.appAnswer.findMany({
-              where: { question: { sessionId: session.id, phase: 'application' } },
-              include: { team: { select: { name: true, number: true } } },
-            })
-          : Promise.resolve([]),
+        db.student.findMany({
+          where: { sessionId: session.id },
+          select: { teamId: true },
+        }),
+        // Réponses d'application de toutes les équipes — ne seront renvoyées
+        // que pour les questions déjà révélées (voir plus bas).
+        db.appAnswer.findMany({
+          where: { question: { sessionId: session.id, phase: 'application' } },
+          include: { team: { select: { name: true, number: true } } },
+        }),
       ])
 
-    const mapQuestion = (q: (typeof ratQuestions)[number], withCorrect: boolean) => ({
+    const mapQuestion = (
+      q: (typeof ratQuestions)[number] | (typeof appQuestions)[number],
+      withCorrect: boolean
+    ) => ({
       id: q.id,
       text: q.text,
       choices: parseChoices(q.choices),
       correct: withCorrect ? q.correct : undefined,
       phase: q.phase,
+      caseId: q.caseId,
     })
 
     // Les bonnes réponses ne sont divulguées qu'après les tests (iRAT + tRAT)
     const revealCorrect = ['appeal', 'feedback', 'finished'].includes(status)
-    // Pour l'application : seulement après révélation simultanée
-    const revealAppCorrect = status === 'application' && session.revealed
+
+    // ----- Révélation automatique par question d'application -----
+    // Une question est révélée dès que toutes les équipes actives (au moins
+    // un étudiant) y ont répondu, ou si l'enseignant force la révélation.
+    const activeTeamIds = [
+      ...new Set(allStudents.filter((s) => s.teamId).map((s) => s.teamId as string)),
+    ]
+    const revealedAppQuestionIds = computeRevealedAppQuestionIds({
+      appQuestionIds: appQuestions.map((q) => q.id),
+      activeTeamIds,
+      appAnswers: allAppAnswersRaw.map((a) => ({ teamId: a.teamId, questionId: a.questionId })),
+      forcedReveal: session.revealed,
+    })
+
+    // Pour l'application : bonne réponse divulguée question par question,
+    // seulement une fois révélée (ou à la fin de la séance).
+    const revealAppCorrect = (questionId: string) =>
+      status === 'finished' || revealedAppQuestionIds.includes(questionId)
 
     const response: Record<string, unknown> = {
       session: {
@@ -92,9 +121,9 @@ export async function GET(req: NextRequest) {
       },
       teamMembers,
       questions: ratQuestions.map((q) => mapQuestion(q, revealCorrect)),
-      applicationQuestions: appQuestions.map((q) =>
-        mapQuestion(q, revealAppCorrect || status === 'finished')
-      ),
+      applicationQuestions: appQuestions.map((q) => mapQuestion(q, revealAppCorrect(q.id))),
+      appCases: cases.map((c) => ({ id: c.id, title: c.title, intro: c.intro, order: c.order })),
+      revealedAppQuestionIds,
       myIratAnswers: myIratAnswers.map((a) => ({
         questionId: a.questionId,
         choice: a.choice,
@@ -120,6 +149,24 @@ export async function GET(req: NextRequest) {
       })),
     }
 
+    // ----- Phase réclamations : bouton « pas de réclamation » + progression -----
+    if (status === 'appeal') {
+      const teams = await db.team.findMany({ where: { sessionId: session.id } })
+      const activeIds = new Set(activeTeamIds)
+      const doneCount = teams.filter((t) => activeIds.has(t.id) && t.appealsDone).length
+      response.myTeamAppealsDone = student.team ? student.team.appealsDone : false
+      response.appealsProgress = { done: doneCount, total: activeTeamIds.length }
+    }
+
+    // ----- Phase application : progression des équipes par question -----
+    if (status === 'application') {
+      response.appAnswerProgress = appQuestions.map((q) => ({
+        questionId: q.id,
+        answered: allAppAnswersRaw.filter((a) => a.questionId === q.id).length,
+        total: activeTeamIds.length,
+      }))
+    }
+
     // Statistiques de classe pour la phase de feedback
     if (status === 'feedback' || status === 'finished') {
       const allIrat = await db.answer.findMany({
@@ -139,14 +186,17 @@ export async function GET(req: NextRequest) {
       }))
     }
 
-    // Réponses de toutes les équipes après la révélation simultanée
-    if (session.revealed) {
-      response.allTeamAppAnswers = allAppAnswers.map((a) => ({
-        teamName: a.team.name,
-        questionId: a.questionId,
-        choice: a.choice,
-        text: a.text,
-      }))
+    // Réponses de toutes les équipes — uniquement pour les questions révélées
+    if (revealedAppQuestionIds.length > 0) {
+      const revealed = new Set(revealedAppQuestionIds)
+      response.allTeamAppAnswers = allAppAnswersRaw
+        .filter((a) => revealed.has(a.questionId))
+        .map((a) => ({
+          teamName: a.team.name,
+          questionId: a.questionId,
+          choice: a.choice,
+          text: a.text,
+        }))
     }
 
     // Évaluation par les pairs

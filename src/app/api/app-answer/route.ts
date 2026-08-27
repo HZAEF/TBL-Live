@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
 
-// POST /api/app-answer — réponse d'équipe à un exercice d'application
+// POST /api/app-answer — réponse d'équipe à une question d'application.
+// La réponse est enregistrée dès le choix (envoi automatique) ; elle peut
+// être modifiée jusqu'à ce que la question soit révélée — c'est-à-dire
+// dès que TOUTES les équipes actives y ont répondu, ou si l'enseignant
+// force la révélation.
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
@@ -26,12 +31,6 @@ export async function POST(req: NextRequest) {
         { status: 409 }
       )
     }
-    if (student.session.revealed) {
-      return NextResponse.json(
-        { error: 'Les réponses sont déjà révélées, plus de modification possible.' },
-        { status: 409 }
-      )
-    }
     if (!student.teamId) {
       return NextResponse.json({ error: 'Vous n\u2019êtes pas dans une équipe.' }, { status: 403 })
     }
@@ -45,6 +44,41 @@ export async function POST(req: NextRequest) {
     const choices = JSON.parse(question.choices) as string[]
     if (choice < 0 || choice >= choices.length) {
       return NextResponse.json({ error: 'Choix invalide.' }, { status: 400 })
+    }
+
+    // Révélation par question : une question dont toutes les équipes actives
+    // ont répondu (ou que l'enseignant a forcée) est verrouillée.
+    const [allAppQuestions, students, appAnswers] = await Promise.all([
+      db.question.findMany({
+        where: { sessionId: student.sessionId, phase: 'application' },
+        select: { id: true },
+      }),
+      db.student.findMany({
+        where: { sessionId: student.sessionId },
+        select: { teamId: true },
+      }),
+      db.appAnswer.findMany({
+        where: { question: { sessionId: student.sessionId } },
+        select: { teamId: true, questionId: true },
+      }),
+    ])
+    const activeTeamIds = [
+      ...new Set(students.filter((s) => s.teamId).map((s) => s.teamId as string)),
+    ]
+    const revealed = computeRevealedAppQuestionIds({
+      appQuestionIds: allAppQuestions.map((q) => q.id),
+      activeTeamIds,
+      appAnswers,
+      forcedReveal: student.session.revealed,
+    })
+    if (revealed.includes(questionId)) {
+      return NextResponse.json(
+        {
+          error:
+            'Les réponses à cette question sont déjà révélées (toutes les équipes ont répondu) — plus de modification possible.',
+        },
+        { status: 409 }
+      )
     }
 
     const existing = await db.appAnswer.findUnique({
@@ -61,7 +95,16 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    return NextResponse.json({ ok: true })
+    // La réponse qui vient d'être enregistrée peut déclencher la révélation
+    // de la question (si c'était la dernière équipe) : on le signale au client.
+    const revealedNow = computeRevealedAppQuestionIds({
+      appQuestionIds: [questionId],
+      activeTeamIds,
+      appAnswers: [...appAnswers, { teamId: student.teamId!, questionId }],
+      forcedReveal: student.session.revealed,
+    })
+
+    return NextResponse.json({ ok: true, revealedNow: revealedNow.length > 0 })
   } catch (e) {
     console.error('POST /api/app-answer', e)
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })

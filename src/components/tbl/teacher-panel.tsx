@@ -5,6 +5,7 @@ import { Plus, LogIn, ChevronRight, Trash2, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import {
   api,
   getTeacherSessions,
@@ -12,9 +13,9 @@ import {
   saveTeacherSession,
   type StoredTeacherSession,
 } from '@/lib/tbl-client'
-import { exampleQuestions, emptyQuestion, QuestionEditor } from './question-editor'
+import { exampleContent, emptyQuestion, emptyCase, QuestionEditor } from './question-editor'
 import { TeacherDashboard } from './teacher-dashboard'
-import type { DraftQuestion } from '@/lib/tbl-types'
+import type { DraftCase, DraftQuestion } from '@/lib/tbl-types'
 import { useToast } from '@/hooks/use-toast'
 
 type View = 'menu' | 'create' | 'login' | 'dashboard'
@@ -215,18 +216,33 @@ function CreateSessionForm({
   const [pin, setPin] = useState('')
   const [teamCount, setTeamCount] = useState(6)
   const [iratMinutes, setIratMinutes] = useState(10)
-  const [questions, setQuestions] = useState<DraftQuestion[]>([emptyQuestion()])
+  // Questions de préparation (iRAT puis tRAT)
+  const [questions, setQuestions] = useState<DraftQuestion[]>([emptyQuestion('rat')])
+  // Cas cliniques d'application : énoncé + 3 à 5 QCU, affichés un par un
+  const [cases, setCases] = useState<DraftCase[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<Record<number, string[]>>({})
+  const [caseErrors, setCaseErrors] = useState<Record<string, Record<number, string[]>>>({})
   const [globalError, setGlobalError] = useState('')
   const { toast } = useToast()
 
   const submit = async () => {
     const qErrors = validateDrafts(questions)
     setErrors(qErrors)
-    if (Object.keys(qErrors).length > 0) {
+    const cErrors: Record<string, Record<number, string[]>> = {}
+    let caseProblem = ''
+    cases.forEach((c) => {
+      if (!c.title.trim()) {
+        caseProblem = 'Chaque cas clinique doit avoir un titre.'
+      }
+      const errs = validateDrafts(c.questions)
+      if (Object.keys(errs).length > 0) cErrors[c.title || 'sans-titre'] = errs
+    })
+    setCaseErrors(cErrors)
+    if (Object.keys(qErrors).length > 0 || Object.keys(cErrors).length > 0 || caseProblem) {
       setGlobalError(
-        'Certaines questions sont incomplètes. Complétez-les ou supprimez-les avant de créer la séance.'
+        caseProblem ||
+          'Certaines questions sont incomplètes. Complétez-les ou supprimez-les avant de créer la séance.'
       )
       return
     }
@@ -252,7 +268,17 @@ function CreateSessionForm({
             text: q.text.trim(),
             choices: q.choices.filter((c) => c.trim()),
             correct: q.correct,
-            phase: q.phase,
+            phase: 'rat' as const,
+          })),
+          cases: cases.map((c, i) => ({
+            title: c.title.trim() || `Application ${i + 1}`,
+            intro: c.intro.trim(),
+            questions: c.questions.map((q) => ({
+              text: q.text.trim(),
+              choices: q.choices.filter((ch) => ch.trim()),
+              correct: q.correct,
+              phase: 'application' as const,
+            })),
           })),
         }),
       })
@@ -273,7 +299,8 @@ function CreateSessionForm({
       <div>
         <h2 className="text-xl font-bold text-stone-900">Créer une séance TBL</h2>
         <p className="mt-1 text-sm text-stone-600">
-          Remplissez les informations générales, puis composez vos questions.
+          Remplissez les informations générales, puis composez vos questions de préparation et vos
+          cas cliniques d&apos;application.
         </p>
       </div>
 
@@ -284,7 +311,7 @@ function CreateSessionForm({
             id="title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Ex. Introduction à la photosynthèse — Séance 3"
+            placeholder="Ex. Cardiologie — Séance 3 : douleur thoracique"
             className="mt-1.5 h-11"
           />
         </div>
@@ -335,7 +362,12 @@ function CreateSessionForm({
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-stone-900">Questions ({questions.length})</h3>
+          <h3 className="flex items-center gap-2 font-bold text-stone-900">
+            <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-white">
+              iRAT / tRAT
+            </span>
+            Questions de préparation ({questions.length})
+          </h3>
           <div className="flex gap-2">
             <Button
               type="button"
@@ -343,7 +375,9 @@ function CreateSessionForm({
               size="sm"
               className="border-amber-300 text-amber-700 hover:bg-amber-50"
               onClick={() => {
-                setQuestions(exampleQuestions())
+                const ex = exampleContent()
+                setQuestions(ex.rat)
+                setCases(ex.cases)
                 setErrors({})
               }}
             >
@@ -355,7 +389,7 @@ function CreateSessionForm({
               variant="outline"
               size="sm"
               className="border-stone-300"
-              onClick={() => setQuestions([...questions, emptyQuestion()])}
+              onClick={() => setQuestions([...questions, emptyQuestion('rat')])}
             >
               <Plus className="mr-1 h-3.5 w-3.5" />
               Question
@@ -365,7 +399,7 @@ function CreateSessionForm({
 
         {questions.map((q, i) => (
           <QuestionEditor
-            key={i}
+            key={`rat-${i}`}
             index={i}
             value={q}
             errors={errors[i]}
@@ -381,11 +415,121 @@ function CreateSessionForm({
             }
           />
         ))}
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="flex items-center gap-2 font-bold text-stone-900">
+            <span className="rounded-full bg-lime-600 px-2.5 py-0.5 text-xs font-bold text-white">
+              Application
+            </span>
+            Cas cliniques ({cases.length})
+          </h3>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-lime-500 text-lime-700 hover:bg-lime-50"
+            onClick={() => setCases([...cases, emptyCase()])}
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            Cas clinique
+          </Button>
+        </div>
+
+        {cases.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-lime-300 bg-lime-50/50 p-4 text-center text-sm text-stone-500">
+            Aucun cas clinique pour le moment. Chaque cas contient un énoncé et 3 à 5 QCU,
+            affichés un par un aux équipes — avec révélation automatique des réponses dès que
+            toutes les équipes ont répondu. (Vous pourrez aussi en ajouter plus tard depuis le
+            tableau de bord.)
+          </p>
+        )}
+
+        {cases.map((c, ci) => (
+          <div key={`case-${ci}`} className="space-y-2 rounded-2xl border-2 border-lime-200 bg-lime-50/40 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-bold text-stone-800">Application {ci + 1}</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-stone-400 hover:bg-red-50 hover:text-red-600"
+                onClick={() => setCases(cases.filter((_, idx) => idx !== ci))}
+                aria-label={`Supprimer le cas ${ci + 1}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+            <Input
+              value={c.title}
+              onChange={(e) => {
+                const next = [...cases]
+                next[ci] = { ...c, title: e.target.value }
+                setCases(next)
+              }}
+              placeholder={`Titre du cas (ex. : Cas clinique — Mme A., 62 ans, douleur thoracique)`}
+              className="h-10 border-lime-300"
+            />
+            <Textarea
+              value={c.intro}
+              onChange={(e) => {
+                const next = [...cases]
+                next[ci] = { ...c, intro: e.target.value }
+                setCases(next)
+              }}
+              placeholder="Énoncé du cas : contexte, patient, données cliniques ou biologiques…"
+              rows={3}
+              className="resize-none border-lime-300 text-[15px]"
+            />
+            {c.questions.map((q, qi) => (
+              <QuestionEditor
+                key={`case-${ci}-q-${qi}`}
+                index={qi}
+                value={q}
+                prefix="QCU"
+                hidePhaseToggle
+                errors={caseErrors[c.title || 'sans-titre']?.[qi]}
+                onChange={(nq) => {
+                  const next = [...cases]
+                  next[ci] = {
+                    ...c,
+                    questions: c.questions.map((old, idx) => (idx === qi ? nq : old)),
+                  }
+                  setCases(next)
+                }}
+                onDelete={() => {
+                  const next = [...cases]
+                  next[ci] = { ...c, questions: c.questions.filter((_, idx) => idx !== qi) }
+                  setCases(next)
+                }}
+              />
+            ))}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 w-full border-lime-400 text-lime-700 hover:bg-lime-100"
+              onClick={() => {
+                const next = [...cases]
+                next[ci] = { ...c, questions: [...c.questions, emptyQuestion('application')] }
+                setCases(next)
+              }}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              Ajouter une QCU à ce cas
+            </Button>
+            <p className="text-center text-xs text-stone-500">
+              {c.questions.length} QCU — 3 à 5 conseillées par cas
+            </p>
+          </div>
+        ))}
 
         <p className="text-xs leading-relaxed text-stone-500">
-          Astuce : les questions « iRAT / tRAT » servent à vérifier la préparation (test individuel
-          puis test en équipe). Les questions « Application » sont des problèmes plus complexes
-          résolus en équipe avec révélation simultanée des réponses.
+          Astuce : les questions « iRAT / tRAT » vérifient la préparation (test individuel puis
+          test en équipe). Les « cas cliniques » d&apos;application sont des problèmes complexes
+          résolus en équipe : les réponses de chaque question sont révélées automatiquement dès
+          que toutes les équipes ont répondu.
         </p>
       </div>
 

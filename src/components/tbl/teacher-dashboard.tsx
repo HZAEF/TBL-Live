@@ -33,6 +33,7 @@ import {
   PHASE_INFO,
   PHASE_ORDER,
   nextPhase,
+  computeRevealedAppQuestionIds,
   type DashboardDTO,
   type Phase,
 } from '@/lib/tbl-types'
@@ -337,7 +338,7 @@ const NEXT_LABEL: Record<Phase, string | null> = {
   irat: 'Terminer l\u2019iRAT → lancer le test en équipe (tRAT)',
   trat: 'Terminer le tRAT → ouvrir les réclamations',
   appeal: 'Clôturer les réclamations → passer au feedback',
-  feedback: 'Lancer les exercices d\u2019application',
+  feedback: 'Lancer les cas cliniques d\u2019application',
   application: 'Passer à l\u2019évaluation par les pairs',
   peer: 'Terminer la séance',
   finished: null,
@@ -348,8 +349,8 @@ const NEXT_LABEL: Record<Phase, string | null> = {
 const PHASE_WARNING: Partial<Record<Phase, string>> = {
   irat: 'Les étudiants ne pourront plus répondre à l\u2019iRAT une fois la phase passée. Vérifiez que tout le monde a terminé.',
   trat: 'Une fois le tRAT terminé, les équipes ne pourront plus répondre. Vérifiez que toutes les équipes ont fini.',
-  appeal: 'Les équipes ne pourront plus soumettre de réclamations. Examinez les réclamations en attente avant de continuer.',
-  application: 'Pensez à révéler les réponses avant de quitter cette phase, sinon les étudiants ne les verront jamais.',
+  appeal: 'Les équipes ne pourront plus soumettre de réclamations (le passage au feedback est sinon automatique dès que toutes les équipes ont répondu).',
+  application: 'Les équipes ne pourront plus répondre aux cas cliniques. Les questions déjà révélées restent visibles.',
   peer: 'Vérifiez que tous les étudiants ont soumis leur évaluation avant de terminer.',
 }
 
@@ -623,11 +624,56 @@ function OverviewPanel({
   // ----- appeal -----
   if (status === 'appeal') {
     const pending = data.appeals.filter((a) => a.status === 'pending')
+    const activeTeams = data.teams.filter((t) => data.students.some((s) => s.teamId === t.id))
+    const doneTeams = activeTeams.filter((t) => t.appealsDone)
     return (
       <div className="space-y-4">
         <InfoCard tone="amber" title="Étape en cours : réclamations">
-          {PHASE_INFO.appeal.teacherHint} Donnez 5 à 10 minutes aux équipes.
+          {PHASE_INFO.appeal.teacherHint}
         </InfoCard>
+
+        {/* Progression du bouton « pas de réclamation » */}
+        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-bold text-amber-900">
+            Équipes ayant répondu : {doneTeams.length}/{activeTeams.length}
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            Dès que toutes les équipes auront cliqué sur « Nous n&rsquo;avons pas de réclamation »
+            (ou confirmé la fin de leurs réclamations), la séance passera automatiquement au
+            feedback. Vous pouvez aussi avancer manuellement à tout moment.
+          </p>
+          <div className="mt-3 space-y-1.5">
+            {activeTeams.map((t) => {
+              const appeals = data.appeals.filter((a) => a.teamId === t.id)
+              return (
+                <div
+                  key={t.id}
+                  className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm"
+                >
+                  <span className="text-stone-800">{t.name}</span>
+                  <span
+                    className={cn(
+                      'font-semibold',
+                      t.appealsDone ? 'text-emerald-600' : 'text-stone-400'
+                    )}
+                  >
+                    {t.appealsDone ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Check className="h-4 w-4" />
+                        {appeals.length > 0
+                          ? `terminé (${appeals.length} réclamation${appeals.length > 1 ? 's' : ''})`
+                          : 'aucune réclamation'}
+                      </span>
+                    ) : (
+                      'en attente…'
+                    )}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
         <AppealsTab data={data} manage={manage} />
         {pending.length === 0 && (
           <p className="text-center text-sm text-stone-500">
@@ -702,37 +748,115 @@ function OverviewPanel({
   // ----- application -----
   if (status === 'application') {
     const activeTeams = data.teams.filter((t) => data.students.some((s) => s.teamId === t.id))
+    const revealedIds = new Set(
+      computeRevealedAppQuestionIds({
+        appQuestionIds: appQs.map((q) => q.id),
+        activeTeamIds: activeTeams.map((t) => t.id),
+        appAnswers: data.appAnswers,
+        forcedReveal: data.session.revealed,
+      })
+    )
+    // Cas cliniques (+ groupe « libre » pour l'ancien format)
+    const caseGroups = [
+      ...data.cases.map((c) => ({
+        key: c.id,
+        title: c.title,
+        questions: appQs.filter((q) => q.caseId === c.id),
+      })),
+      ...(appQs.some((q) => !q.caseId)
+        ? [
+            {
+              key: 'libres',
+              title: 'Exercices d\u2019application (ancien format)',
+              questions: appQs.filter((q) => !q.caseId),
+            },
+          ]
+        : []),
+    ].filter((g) => g.questions.length > 0)
+
     return (
       <div className="space-y-4">
-        <InfoCard tone="emerald" title="Étape en cours : exercices d'application">
-          {PHASE_INFO.application.teacherHint} Les équipes soumettent leur choix depuis un seul
-          téléphone, avec une justification écrite.
+        <InfoCard tone="emerald" title="Étape en cours : cas cliniques d'application">
+          {PHASE_INFO.application.teacherHint}
         </InfoCard>
-        {appQs.map((q, qi) => {
-          const answered = data.appAnswers.filter((a) => a.questionId === q.id)
-          const answeredTeams = new Set(answered.map((a) => a.teamId)).size
-          return (
-            <div key={q.id} className="rounded-2xl border border-stone-200 bg-white p-4">
-              <p className="mb-2 line-clamp-2 text-sm font-medium text-stone-700">
-                Exercice {qi + 1}. {q.text}
-              </p>
-              <p className="text-sm text-stone-600">
-                <strong>
-                  {answeredTeams}/{activeTeams.length}
-                </strong>{' '}
-                équipe(s) ont répondu
-              </p>
-            </div>
-          )
-        })}
+
+        <p className="rounded-xl border border-lime-200 bg-lime-50 px-4 py-3 text-sm text-lime-900">
+          Les réponses de chaque question sont <strong>révélées automatiquement</strong> dès que
+          toutes les équipes y ont répondu ({activeTeams.length} équipe(s) active(s)). Vous pouvez
+          aussi tout révéler immédiatement avec le bouton en bas de page.
+        </p>
+
+        {caseGroups.map((g, gi) => (
+          <section key={g.key} className="space-y-2">
+            <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
+              <span className="rounded-full bg-lime-600 px-2.5 py-0.5 text-xs font-bold text-white">
+                Application {gi + 1}
+              </span>
+              {g.title}
+            </h3>
+            {g.questions.map((q, qi) => {
+              const answeredTeams = new Set(
+                data.appAnswers.filter((a) => a.questionId === q.id).map((a) => a.teamId)
+              ).size
+              const revealed = revealedIds.has(q.id)
+              return (
+                <div key={q.id} className="rounded-2xl border border-stone-200 bg-white p-4">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-stone-700">
+                      Q{qi + 1}. {q.text.length > 90 ? q.text.slice(0, 90) + '…' : q.text}
+                    </p>
+                    {revealed ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
+                        <Eye className="h-3.5 w-3.5" /> Révélée
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600">
+                        en attente ({answeredTeams}/{activeTeams.length})
+                      </span>
+                    )}
+                  </div>
+                  {revealed && (
+                    <div className="space-y-1.5">
+                      {activeTeams.map((t) => {
+                        const ans = data.appAnswers.find(
+                          (a) => a.questionId === q.id && a.teamId === t.id
+                        )
+                        return (
+                          <div
+                            key={t.id}
+                            className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm"
+                          >
+                            <span className="text-stone-700">{t.name}</span>
+                            <span
+                              className={cn(
+                                'font-bold',
+                                ans
+                                  ? ans.choice === q.correct
+                                    ? 'text-emerald-600'
+                                    : 'text-stone-800'
+                                  : 'text-stone-400'
+                              )}
+                            >
+                              {ans ? choiceLetter(ans.choice) : '—'}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </section>
+        ))}
+
         <div className="rounded-2xl border-2 border-dashed border-amber-300 bg-amber-50 p-4">
           <p className="text-sm font-bold text-amber-900">
-            Révélation simultanée : {data.session.revealed ? 'activée' : 'désactivée'}
+            Forçage manuel : {data.session.revealed ? 'activé' : 'désactivé'}
           </p>
           <p className="mb-3 mt-1 text-sm text-amber-800">
-            {data.session.revealed
-              ? 'Les étudiants voient les réponses de toutes les équipes. C\'est le moment d\'animer le débat !'
-              : 'Attendez que toutes les équipes aient répondu, puis révélez pour lancer le débat.'}
+            La révélation est automatique dès que toutes les équipes ont répondu à une question.
+            Ce bouton sert uniquement à révéler en avance (par exemple si une équipe a abandonné).
           </p>
           <Button
             className={cn(
@@ -743,53 +867,15 @@ function OverviewPanel({
           >
             {data.session.revealed ? (
               <>
-                <EyeOff className="mr-2 h-4 w-4" /> Masquer les réponses
+                <EyeOff className="mr-2 h-4 w-4" /> Annuler le forçage
               </>
             ) : (
               <>
-                <Eye className="mr-2 h-4 w-4" /> Révéler les réponses de toutes les équipes
+                <Eye className="mr-2 h-4 w-4" /> Tout révéler maintenant
               </>
             )}
           </Button>
         </div>
-        {data.session.revealed && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {appQs.map((q, qi) => (
-              <div key={q.id} className="rounded-2xl border border-stone-200 bg-white p-4">
-                <p className="mb-2 line-clamp-1 text-sm font-bold text-stone-800">
-                  Exercice {qi + 1}
-                </p>
-                <div className="space-y-1.5">
-                  {activeTeams.map((t) => {
-                    const ans = data.appAnswers.find(
-                      (a) => a.questionId === q.id && a.teamId === t.id
-                    )
-                    return (
-                      <div
-                        key={t.id}
-                        className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm"
-                      >
-                        <span className="text-stone-700">{t.name}</span>
-                        <span
-                          className={cn(
-                            'font-bold',
-                            ans
-                              ? ans.choice === q.correct
-                                ? 'text-emerald-600'
-                                : 'text-stone-800'
-                              : 'text-stone-400'
-                          )}
-                        >
-                          {ans ? choiceLetter(ans.choice) : '—'}
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     )
   }

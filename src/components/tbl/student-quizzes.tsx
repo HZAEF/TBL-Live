@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Check, RotateCcw, Send, Star, Users, X } from 'lucide-react'
+import { ArrowRight, Check, ChevronLeft, ChevronRight, RotateCcw, Send, Star, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/tbl-client'
-import type { StudentStateDTO } from '@/lib/tbl-types'
+import type { QuestionDTO, StudentStateDTO } from '@/lib/tbl-types'
 import { ChoiceButton, choiceLetter, Countdown, InfoCard } from './shared'
 import { useToast } from '@/hooks/use-toast'
 
@@ -317,7 +317,10 @@ export function AppealView({
   const { toast } = useToast()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [sendingDone, setSendingDone] = useState(false)
   const appealByQuestion = new Map(data.myAppeals.map((a) => [a.questionId, a]))
+  const myTeamDone = data.myTeamAppealsDone ?? false
+  const progress = data.appealsProgress
 
   if (!data.me.team) {
     return (
@@ -356,8 +359,101 @@ export function AppealView({
     }
   }
 
+  // Bouton « pas de réclamation » : marque l'équipe comme ayant répondu à
+  // cette phase. Quand toutes les équipes ont répondu, la séance passe
+  // automatiquement au feedback.
+  const markDone = async (done: boolean) => {
+    setSendingDone(true)
+    try {
+      const res = await api<{ advanced: boolean; doneCount: number; total: number }>(
+        '/api/appeal-done',
+        { method: 'POST', body: JSON.stringify({ token, done }) }
+      )
+      if (done) {
+        toast({
+          title: res.advanced ? 'Toutes les équipes ont répondu !' : 'Réponse enregistrée',
+          description: res.advanced
+            ? 'La séance passe automatiquement à la phase de feedback.'
+            : `En attente des autres équipes (${res.doneCount}/${res.total}).`,
+        })
+      }
+      await refresh()
+    } catch (e) {
+      toast({
+        title: 'Impossible d\u2019envoyer',
+        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSendingDone(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
+      {/* Bouton « pas de réclamation » — en haut, avant les questions */}
+      <div
+        className={cn(
+          'rounded-2xl border-2 p-4',
+          myTeamDone
+            ? 'border-emerald-300 bg-emerald-50'
+            : 'border-amber-300 bg-amber-50'
+        )}
+      >
+        {!myTeamDone ? (
+          <>
+            <p className="text-sm font-bold text-amber-900">
+              {data.myAppeals.length > 0
+                ? 'Vos réclamations sont envoyées'
+                : 'Aucune réclamation à formuler ?'}
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-amber-800">
+              {data.myAppeals.length > 0
+                ? 'Si votre équipe a terminé, confirmez ci-dessous. Vous pourrez encore annuler tant que les autres équipes travaillent.'
+                : 'Si votre équipe n\u2019a aucune contestation, cliquez sur le bouton : la séance passera au feedback dès que toutes les équipes auront répondu.'}
+            </p>
+            <Button
+              className="mt-3 h-12 w-full bg-amber-600 text-base hover:bg-amber-700"
+              disabled={sendingDone}
+              onClick={() => markDone(true)}
+            >
+              <Check className="mr-2 h-5 w-5" />
+              {data.myAppeals.length > 0
+                ? 'Nous avons terminé nos réclamations'
+                : 'Nous n\u2019avons pas de réclamation'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <p className="flex items-center gap-2 text-sm font-bold text-emerald-900">
+              <Check className="h-5 w-5" />
+              Votre équipe a répondu
+              {data.myAppeals.length > 0
+                ? ` (${data.myAppeals.length} réclamation${data.myAppeals.length > 1 ? 's' : ''} envoyée${data.myAppeals.length > 1 ? 's' : ''})`
+                : ' (aucune réclamation)'}
+            </p>
+            <p className="mt-1 text-sm text-emerald-800">
+              {progress && progress.total > progress.done
+                ? `En attente des autres équipes : ${progress.done}/${progress.total} ont répondu.`
+                : 'La phase va se terminer…'}
+            </p>
+            <button
+              type="button"
+              className="mt-2 text-xs font-semibold text-amber-700 underline"
+              onClick={() => markDone(false)}
+              disabled={sendingDone}
+            >
+              Annuler — notre équipe veut (re)formuler une réclamation
+            </button>
+          </>
+        )}
+        {progress && !myTeamDone && (
+          <p className="mt-2 text-center text-xs font-medium text-amber-700">
+            {progress.done}/{progress.total} équipe(s) ont déjà répondu
+          </p>
+        )}
+      </div>
+
       <InfoCard tone="amber" title="Réclamations (appels)">
         Si vous pensez qu&apos;une de vos réponses devrait être acceptée (question ambiguë, sources
         contradictoires…), écrivez une justification claire. Votre professeur décidera.
@@ -431,7 +527,14 @@ export function AppealView({
   )
 }
 
-// ================= Application =================
+// ================= Application : cas cliniques =================
+
+interface CaseGroup {
+  key: string
+  title: string
+  intro: string | null
+  questions: QuestionDTO[]
+}
 
 export function ApplicationView({
   data,
@@ -444,10 +547,50 @@ export function ApplicationView({
 }) {
   const { toast } = useToast()
   const questions = data.applicationQuestions
-  const [selected, setSelected] = useState<Record<string, number>>({})
+  const revealedIds = useMemo(
+    () => new Set(data.revealedAppQuestionIds ?? []),
+    [data.revealedAppQuestionIds]
+  )
+  const progressByQuestion = useMemo(
+    () => new Map((data.appAnswerProgress ?? []).map((p) => [p.questionId, p])),
+    [data.appAnswerProgress]
+  )
+
+  // Groupes affichés : un par cas clinique (+ un groupe pour les exercices
+  // libres de l'ancien format), affichés UN PAR UN.
+  const groups: CaseGroup[] = useMemo(() => {
+    const gs: CaseGroup[] = (data.appCases ?? []).map((c) => ({
+      key: c.id,
+      title: c.title,
+      intro: c.intro,
+      questions: questions.filter((q) => q.caseId === c.id),
+    }))
+    const free = questions.filter((q) => !q.caseId)
+    if (free.length > 0) {
+      gs.push({
+        key: 'libres',
+        title: 'Exercices d\u2019application',
+        intro: null,
+        questions: free,
+      })
+    }
+    return gs.filter((g) => g.questions.length > 0)
+  }, [data.appCases, questions])
+
+  // Premier groupe non terminé par défaut (comme pour l'iRAT)
+  const answeredIds = useMemo(
+    () => new Set(data.teamAppAnswers.map((a) => a.questionId)),
+    [data.teamAppAnswers]
+  )
+  const firstPending = groups.findIndex((g) => g.questions.some((q) => !answeredIds.has(q.id)))
+  const [groupIndex, setGroupIndex] = useState(() => Math.max(0, firstPending))
+  const [selection, setSelection] = useState<Record<string, number>>({})
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [submitting, setSubmitting] = useState<string | null>(null)
-  const revealed = data.session.revealed
+  const [saving, setSaving] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelection({})
+  }, [data.session.status])
 
   if (!data.me.team) {
     return (
@@ -456,154 +599,340 @@ export function ApplicationView({
       </InfoCard>
     )
   }
-  if (questions.length === 0) {
+  if (groups.length === 0) {
     return (
-      <InfoCard title="Aucun exercice">
+      <InfoCard title="Aucun cas clinique">
         Votre professeur n&apos;a pas prévu d&apos;exercice d&apos;application pour cette séance.
         Attendez la suite.
       </InfoCard>
     )
   }
 
-  const submit = async (questionId: string) => {
-    const choice = selected[questionId]
-    if (choice === undefined) {
-      toast({
-        title: 'Choisissez une réponse',
-        description: 'Sélectionnez d\u2019abord la réponse de votre équipe.',
-        variant: 'destructive',
-      })
-      return
-    }
-    setSubmitting(questionId)
+  const group = groups[Math.min(groupIndex, groups.length - 1)]
+  const isLastGroup = groupIndex >= groups.length - 1
+  const groupDone = group.questions.every(
+    (q) => answeredIds.has(q.id) || revealedIds.has(q.id)
+  )
+  const allDone = groups.every((g) =>
+    g.questions.every((q) => answeredIds.has(q.id) || revealedIds.has(q.id))
+  )
+
+  // Enregistrement : envoi automatique au premier choix, mise à jour
+  // explicite ensuite (bouton « Mettre à jour la réponse de l'équipe »).
+  const save = async (questionId: string, choice: number, text: string) => {
+    setSaving(questionId)
     try {
-      await api('/api/app-answer', {
+      const res = await api<{ revealedNow: boolean }>('/api/app-answer', {
         method: 'POST',
-        body: JSON.stringify({ token, questionId, choice, text: drafts[questionId] ?? '' }),
+        body: JSON.stringify({ token, questionId, choice, text }),
       })
-      toast({ title: 'Réponse enregistrée', description: 'Vous pouvez encore la modifier avant la révélation.' })
+      setSelection((s) => {
+        const next = { ...s }
+        delete next[questionId]
+        return next
+      })
+      if (res.revealedNow) {
+        toast({
+          title: 'Toutes les équipes ont répondu !',
+          description: 'Les réponses à cette question sont maintenant révélées.',
+        })
+      }
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019envoyer',
+        title: 'Impossible d\u2019enregistrer',
         description: e instanceof Error ? e.message : 'Erreur inconnue.',
         variant: 'destructive',
       })
+      await refresh()
     } finally {
-      setSubmitting(null)
+      setSaving(null)
     }
   }
 
   return (
     <div className="space-y-4">
-      <InfoCard tone="emerald" title="Exercice d'application">
-        Travaillez le problème en équipe, choisissez ensemble une réponse et justifiez-la. Toutes
-        les équipes verront les réponses au même moment quand votre professeur les révélera.
+      <InfoCard tone="emerald" title="Cas cliniques d'application">
+        Travaillez chaque cas en équipe et choisissez vos réponses : elles sont{' '}
+        <strong>enregistrées automatiquement</strong> dès que vous cliquez. Les réponses de chaque
+        question seront <strong>révélées automatiquement</strong> dès que toutes les équipes auront
+        répondu. Pour changer une réponse avant la révélation, utilisez « Mettre à jour ».
       </InfoCard>
 
-      {questions.map((q, qi) => {
-        const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
-        const sel = selected[q.id] ?? mine?.choice
-        return (
-          <div key={q.id} className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wide text-stone-400">
-              Exercice {qi + 1}
-            </p>
-            <p className="mt-2 text-lg font-semibold leading-snug text-stone-900">{q.text}</p>
-            <div className="mt-5 space-y-2.5">
-              {q.choices.map((c, ci) => (
-                <ChoiceButton
-                  key={ci}
-                  letter={choiceLetter(ci)}
-                  text={c}
-                  state={sel === ci ? 'selected' : 'default'}
-                  disabled={revealed}
-                  onClick={() => setSelected({ ...selected, [q.id]: ci })}
-                />
-              ))}
-            </div>
+      {/* Sélecteur de cas (un cas à la fois) */}
+      {groups.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {groups.map((g, i) => {
+            const gDone = g.questions.every(
+              (q) => answeredIds.has(q.id) || revealedIds.has(q.id)
+            )
+            return (
+              <button
+                key={g.key}
+                onClick={() => setGroupIndex(i)}
+                aria-label={`Aller à l'application ${i + 1}`}
+                className={cn(
+                  'flex h-9 w-9 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
+                  i === groupIndex
+                    ? 'border-lime-600 bg-white text-lime-700'
+                    : gDone
+                      ? 'border-lime-500 bg-lime-500 text-white'
+                      : 'border-stone-300 bg-white text-stone-400'
+                )}
+              >
+                {gDone && i !== groupIndex ? <Check className="h-4 w-4" /> : i + 1}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
-            {!revealed ? (
-              <>
-                <Textarea
-                  value={drafts[q.id] ?? mine?.text ?? ''}
-                  onChange={(e) => setDrafts({ ...drafts, [q.id]: e.target.value })}
-                  placeholder="Justification de votre équipe (facultatif mais recommandé)…"
-                  rows={3}
-                  className="mt-4 resize-none text-[15px]"
-                />
-                <Button
-                  className="mt-3 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
-                  disabled={submitting === q.id}
-                  onClick={() => submit(q.id)}
-                >
-                  {mine ? (
-                    <>
-                      <RotateCcw className="mr-2 h-4 w-4" />
-                      Mettre à jour la réponse de l&apos;équipe
-                    </>
-                  ) : (
-                    <>
-                      <Send className="mr-2 h-4 w-4" />
-                      Envoyer la réponse de l&apos;équipe
-                    </>
-                  )}
-                </Button>
-                {mine && (
-                  <p className="mt-2 text-center text-xs font-medium text-emerald-700">
-                    <Check className="mr-1 inline h-3.5 w-3.5" />
-                    Réponse enregistrée ({choiceLetter(mine.choice)}) — modifiable jusqu&apos;à la
-                    révélation.
-                  </p>
-                )}
-              </>
+      {/* En-tête du cas courant */}
+      <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-5">
+        <p className="text-xs font-bold uppercase tracking-wide text-lime-700">
+          {groups.length > 1 ? `Application ${groupIndex + 1} sur ${groups.length}` : 'Application'}
+          {!groupDone && ' — en cours'}
+          {groupDone && ' — terminé'}
+        </p>
+        <p className="mt-1.5 text-lg font-bold leading-snug text-stone-900">{group.title}</p>
+        {group.intro && (
+          <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-stone-700">
+            {group.intro}
+          </p>
+        )}
+      </div>
+
+      {/* QCU du cas */}
+      {group.questions.map((q, qi) => (
+        <AppQuestionCard
+          key={q.id}
+          q={q}
+          qi={qi}
+          revealed={revealedIds.has(q.id)}
+          progress={progressByQuestion.get(q.id)}
+          mine={data.teamAppAnswers.find((a) => a.questionId === q.id)}
+          pendingChoice={selection[q.id]}
+          textDraft={drafts[q.id]}
+          saving={saving === q.id}
+          teamName={data.me.team?.name}
+          allTeamAppAnswers={data.allTeamAppAnswers ?? []}
+          onChoice={(ci) => {
+            const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
+            if (mine === undefined) {
+              // Premier choix : envoi automatique
+              void save(q.id, ci, drafts[q.id] ?? '')
+            } else {
+              // Changement : sélection en attente de mise à jour
+              setSelection({ ...selection, [q.id]: ci })
+            }
+          }}
+          onTextChange={(v) => setDrafts({ ...drafts, [q.id]: v })}
+          onUpdate={() => {
+            const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
+            const choice = selection[q.id] ?? mine?.choice ?? 0
+            void save(q.id, choice, drafts[q.id] ?? mine?.text ?? '')
+          }}
+        />
+      ))}
+
+      {/* Navigation entre cas */}
+      <div className="flex gap-3">
+        <Button
+          variant="outline"
+          className="h-12 flex-1 border-stone-300 text-stone-700"
+          disabled={groupIndex === 0}
+          onClick={() => {
+            setGroupIndex(Math.max(0, groupIndex - 1))
+            window.scrollTo({ top: 0 })
+          }}
+        >
+          <ChevronLeft className="mr-1 h-5 w-5" />
+          Précédent
+        </Button>
+        {!isLastGroup ? (
+          <Button
+            className="h-12 flex-[2] bg-lime-600 text-base hover:bg-lime-700"
+            onClick={() => {
+              setGroupIndex(Math.min(groups.length - 1, groupIndex + 1))
+              window.scrollTo({ top: 0 })
+            }}
+          >
+            {groupDone ? 'Cas suivant' : 'Passer au cas suivant'}
+            <ChevronRight className="ml-2 h-5 w-5" />
+          </Button>
+        ) : (
+          <div className="flex flex-[2] items-center justify-center rounded-xl border-2 border-dashed border-stone-300 px-3 text-center text-sm text-stone-500">
+            {allDone ? (
+              <span className="font-semibold text-emerald-700">
+                <Check className="mr-1 inline h-4 w-4" />
+                Tous les cas sont traités — attendez votre professeur.
+              </span>
             ) : (
-              <div className="mt-5 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
-                <p className="mb-2 text-sm font-bold text-amber-900">
-                  Réponses de toutes les équipes :
-                </p>
-                <div className="space-y-1.5">
-                  {(data.allTeamAppAnswers ?? [])
-                    .filter((a) => a.questionId === q.id)
-                    .map((a, i) => (
-                      <div
-                        key={i}
-                        className={cn(
-                          'flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm',
-                          a.teamName === data.me.team?.name && 'border-2 border-emerald-400'
-                        )}
-                      >
-                        <span className="text-stone-700">
-                          {a.teamName}
-                          {a.teamName === data.me.team?.name && (
-                            <span className="ml-1 text-xs font-bold text-emerald-600">(vous)</span>
-                          )}
-                        </span>
-                        <span
-                          className={cn(
-                            'font-bold',
-                            q.correct !== undefined && a.choice === q.correct
-                              ? 'text-emerald-600'
-                              : 'text-stone-800'
-                          )}
-                        >
-                          {choiceLetter(a.choice)}
-                        </span>
-                      </div>
-                    ))}
-                  {(data.allTeamAppAnswers ?? []).filter((a) => a.questionId === q.id).length ===
-                    0 && <p className="text-sm text-stone-500">Aucune équipe n&apos;a répondu.</p>}
-                </div>
-                {q.correct !== undefined && (
-                  <p className="mt-2 text-xs text-amber-800">
-                    Réponse attendue : {choiceLetter(q.correct)}
-                  </p>
-                )}
-              </div>
+              'Dernier cas — attendez les autres équipes et votre professeur.'
             )}
           </div>
-        )
-      })}
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AppQuestionCard({
+  q,
+  qi,
+  revealed,
+  progress,
+  mine,
+  pendingChoice,
+  textDraft,
+  saving,
+  teamName,
+  allTeamAppAnswers,
+  onChoice,
+  onTextChange,
+  onUpdate,
+}: {
+  q: QuestionDTO
+  qi: number
+  revealed: boolean
+  progress?: { questionId: string; answered: number; total: number }
+  mine?: { questionId: string; choice: number; text: string | null }
+  pendingChoice?: number
+  textDraft?: string
+  saving: boolean
+  teamName?: string
+  allTeamAppAnswers: { teamName: string; questionId: string; choice: number; text: string | null }[]
+  onChoice: (ci: number) => void
+  onTextChange: (v: string) => void
+  onUpdate: () => void
+}) {
+  const sel = pendingChoice ?? mine?.choice
+  const dirty =
+    mine !== undefined &&
+    ((pendingChoice !== undefined && pendingChoice !== mine.choice) ||
+      (textDraft !== undefined && textDraft !== (mine.text ?? '')))
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+      <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Question {qi + 1}</p>
+      <p className="mt-2 text-lg font-semibold leading-snug text-stone-900">{q.text}</p>
+
+      <div className="mt-5 space-y-2.5">
+        {q.choices.map((c, ci) => {
+          let state: 'default' | 'selected' | 'correct' | 'wrong' = 'default'
+          if (revealed && q.correct !== undefined) {
+            if (ci === q.correct) state = 'correct'
+            else if (sel === ci) state = 'wrong'
+          } else if (sel === ci) {
+            state = 'selected'
+          }
+          return (
+            <ChoiceButton
+              key={ci}
+              letter={choiceLetter(ci)}
+              text={c}
+              state={state}
+              showIcon={revealed}
+              disabled={revealed || saving}
+              onClick={() => onChoice(ci)}
+            />
+          )
+        })}
+      </div>
+
+      {revealed ? (
+        <div className="mt-5 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
+          <p className="mb-2 text-sm font-bold text-amber-900">
+            Réponses de toutes les équipes :
+          </p>
+          <div className="space-y-1.5">
+            {allTeamAppAnswers
+              .filter((a) => a.questionId === q.id)
+              .map((a, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm',
+                    a.teamName === teamName && 'border-2 border-emerald-400'
+                  )}
+                >
+                  <span className="text-stone-700">
+                    {a.teamName}
+                    {a.teamName === teamName && (
+                      <span className="ml-1 text-xs font-bold text-emerald-600">(vous)</span>
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      'font-bold',
+                      q.correct !== undefined && a.choice === q.correct
+                        ? 'text-emerald-600'
+                        : 'text-stone-800'
+                    )}
+                  >
+                    {choiceLetter(a.choice)}
+                  </span>
+                </div>
+              ))}
+            {allTeamAppAnswers.filter((a) => a.questionId === q.id).length === 0 && (
+              <p className="text-sm text-stone-500">Aucune équipe n&apos;a répondu.</p>
+            )}
+          </div>
+          {q.correct !== undefined && (
+            <p className="mt-2 text-xs font-semibold text-amber-900">
+              Réponse attendue : {choiceLetter(q.correct)} — {q.choices[q.correct]}
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          {mine !== undefined && (
+            <p className="mt-3 text-center text-xs font-medium text-emerald-700">
+              <Check className="mr-1 inline h-3.5 w-3.5" />
+              Réponse enregistrée ({choiceLetter(mine.choice)})
+              {progress && progress.total > 1
+                ? ` — en attente des autres équipes (${progress.answered}/${progress.total})`
+                : ''}
+            </p>
+          )}
+          {mine === undefined && progress && progress.total > 1 && (
+            <p className="mt-3 text-center text-xs text-stone-500">
+              {progress.answered}/{progress.total} équipe(s) ont répondu à cette question
+            </p>
+          )}
+          <Textarea
+            value={textDraft ?? mine?.text ?? ''}
+            onChange={(e) => onTextChange(e.target.value)}
+            placeholder="Justification de votre équipe (facultatif mais recommandé)…"
+            rows={2}
+            className="mt-3 resize-none text-[15px]"
+          />
+          {(dirty || mine === undefined) && (
+            <Button
+              className="mt-3 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
+              disabled={saving || (mine === undefined && sel === undefined)}
+              onClick={onUpdate}
+            >
+              {saving ? 'Envoi…' : mine === undefined ? (
+                <>
+                  <Send className="mr-2 h-4 w-4" />
+                  Envoyer la réponse de l&apos;équipe
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Mettre à jour la réponse de l&apos;équipe
+                </>
+              )}
+            </Button>
+          )}
+          {mine !== undefined && !dirty && pendingChoice === undefined && (
+            <p className="mt-2 text-center text-xs text-stone-500">
+              Pour changer de réponse : choisissez une autre proposition puis « Mettre à jour ».
+            </p>
+          )}
+        </>
+      )}
     </div>
   )
 }

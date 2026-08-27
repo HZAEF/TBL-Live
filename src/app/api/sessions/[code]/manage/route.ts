@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionByCode, PHASES, sanitizeQuestionInput } from '@/lib/tbl'
-
-// Renumérote les questions d'une phase (rat ou application) : 0, 1, 2, …
-// Garantit un ordre stable et sans doublons après une suppression ou un
-// changement de phase.
+// Renumérote les questions « libres » d'une phase (rat ou application,
+// sans cas associé) : 0, 1, 2, … Garantit un ordre stable et sans doublons
+// après une suppression ou un changement de phase.
 async function renumberPhase(sessionId: string, phase: string) {
   const list = await db.question.findMany({
-    where: { sessionId, phase },
+    where: { sessionId, phase, caseId: null },
+    orderBy: [{ order: 'asc' }, { id: 'asc' }],
+  })
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].order !== i) {
+      await db.question.update({ where: { id: list[i].id }, data: { order: i } })
+    }
+  }
+}
+
+// Renumérote les QCU d'un cas clinique : 0, 1, 2, …
+async function renumberCase(caseId: string) {
+  const list = await db.question.findMany({
+    where: { caseId },
     orderBy: [{ order: 'asc' }, { id: 'asc' }],
   })
   for (let i = 0; i < list.length; i++) {
@@ -53,6 +65,15 @@ export async function POST(
             revealed: phase === 'application' ? false : session.revealed,
           },
         })
+        // En entrant (ou revenant) dans la phase réclamations, on repart de
+        // zéro : chaque équipe doit re-confirmer « pas de réclamation » avant
+        // le passage automatique au feedback.
+        if (phase === 'appeal') {
+          await db.team.updateMany({
+            where: { sessionId: session.id },
+            data: { appealsDone: false },
+          })
+        }
         return NextResponse.json({ ok: true })
       }
 
@@ -76,11 +97,39 @@ export async function POST(
             { status: 400 }
           )
         }
-        const count = await db.question.count({
-          where: { sessionId: session.id, phase: q.phase },
-        })
-        if (count >= 60) {
-          return NextResponse.json({ error: 'Maximum de 60 questions par séance.' }, { status: 400 })
+        // Cas clinique ciblé (pour les QCU d'application) : doit appartenir
+        // à la séance et la question doit être de phase application.
+        let caseId: string | null = null
+        if (typeof body.caseId === 'string' && body.caseId) {
+          if (q.phase !== 'application') {
+            return NextResponse.json(
+              { error: 'Seules les questions d\u2019application peuvent être ajoutées à un cas.' },
+              { status: 400 }
+            )
+          }
+          const kase = await db.case.findFirst({
+            where: { id: body.caseId, sessionId: session.id },
+          })
+          if (!kase) {
+            return NextResponse.json({ error: 'Cas clinique introuvable.' }, { status: 404 })
+          }
+          caseId = kase.id
+        }
+        // Numérotation : dans le cas si lié, sinon en fin de liste de la phase
+        let order: number
+        if (caseId) {
+          order = await db.question.count({ where: { caseId } })
+        } else {
+          order = await db.question.count({
+            where: { sessionId: session.id, phase: q.phase, caseId: null },
+          })
+        }
+        const totalCount = await db.question.count({ where: { sessionId: session.id } })
+        if (totalCount >= 120) {
+          return NextResponse.json(
+            { error: 'Maximum de 120 questions par séance (tous types confondus).' },
+            { status: 400 }
+          )
         }
         await db.question.create({
           data: {
@@ -89,9 +138,11 @@ export async function POST(
             choices: JSON.stringify(q.choices),
             correct: q.correct,
             phase: q.phase,
-            // Ordre compté DANS la phase : les questions iRAT/tRAT et les
-            // exercices d'application sont numérotés indépendamment.
-            order: count,
+            caseId,
+            // Ordre compté DANS la phase (ou dans le cas) : les questions
+            // iRAT/tRAT, les QCU d'un cas et les exercices libres sont
+            // numérotés indépendamment.
+            order,
           },
         })
         return NextResponse.json({ ok: true })
@@ -116,11 +167,14 @@ export async function POST(
             choices: JSON.stringify(q.choices),
             correct: q.correct,
             phase: q.phase,
+            // Une question qui quitte la phase application perd son cas
+            caseId: q.phase === 'application' ? existing.caseId : null,
           },
         })
         // Si la question change de phase (rat ↔ application), on renumérote
         // les deux listes pour garder des ordres consécutifs sans doublons.
         if (q.phase !== existing.phase) {
+          if (existing.caseId) await renumberCase(existing.caseId)
           await renumberPhase(session.id, existing.phase)
           await renumberPhase(session.id, q.phase)
         }
@@ -137,9 +191,77 @@ export async function POST(
           return NextResponse.json({ error: 'Question introuvable.' }, { status: 404 })
         }
         await db.question.delete({ where: { id } })
-        // Renumérotation de la phase concernée : ordres consécutifs 0,1,2…
-        // (évite tout risque d'égalité d'ordre → tri toujours stable)
-        await renumberPhase(session.id, existing.phase)
+        // Renumérotation : dans le cas si la question appartenait à un cas,
+        // sinon dans la liste libre de la phase (ordres consécutifs 0,1,2…)
+        if (existing.caseId) {
+          await renumberCase(existing.caseId)
+        } else {
+          await renumberPhase(session.id, existing.phase)
+        }
+        return NextResponse.json({ ok: true })
+      }
+
+      // ----- Cas cliniques d'application -----
+
+      case 'add_case': {
+        const title = typeof body.title === 'string' ? body.title.trim() : ''
+        const intro = typeof body.intro === 'string' ? body.intro.trim().slice(0, 4000) : ''
+        if (title.length < 1 || title.length > 200) {
+          return NextResponse.json(
+            { error: 'Le titre du cas doit contenir entre 1 et 200 caractères.' },
+            { status: 400 }
+          )
+        }
+        const count = await db.case.count({ where: { sessionId: session.id } })
+        if (count >= 20) {
+          return NextResponse.json({ error: 'Maximum de 20 cas cliniques par séance.' }, { status: 400 })
+        }
+        await db.case.create({
+          data: { sessionId: session.id, title, intro: intro || null, order: count },
+        })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'update_case': {
+        const id = body.id
+        const title = typeof body.title === 'string' ? body.title.trim() : ''
+        const intro = typeof body.intro === 'string' ? body.intro.trim().slice(0, 4000) : ''
+        if (typeof id !== 'string' || title.length < 1 || title.length > 200) {
+          return NextResponse.json({ error: 'Cas clinique invalide.' }, { status: 400 })
+        }
+        const existing = await db.case.findFirst({ where: { id, sessionId: session.id } })
+        if (!existing) {
+          return NextResponse.json({ error: 'Cas clinique introuvable.' }, { status: 404 })
+        }
+        await db.case.update({
+          where: { id },
+          data: { title, intro: intro || null },
+        })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'delete_case': {
+        const id = body.id
+        if (typeof id !== 'string') {
+          return NextResponse.json({ error: 'Identifiant manquant.' }, { status: 400 })
+        }
+        const existing = await db.case.findFirst({ where: { id, sessionId: session.id } })
+        if (!existing) {
+          return NextResponse.json({ error: 'Cas clinique introuvable.' }, { status: 404 })
+        }
+        // La suppression du cas supprime aussi ses QCU (et leurs réponses,
+        // par cascade) après confirmation côté client.
+        await db.case.delete({ where: { id } })
+        // Renumérotation des cas restants : 0, 1, 2…
+        const remaining = await db.case.findMany({
+          where: { sessionId: session.id },
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
+        })
+        for (let i = 0; i < remaining.length; i++) {
+          if (remaining[i].order !== i) {
+            await db.case.update({ where: { id: remaining[i].id }, data: { order: i } })
+          }
+        }
         return NextResponse.json({ ok: true })
       }
 

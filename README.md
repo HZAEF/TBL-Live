@@ -4,11 +4,11 @@ Application web gratuite qui déroule **toutes les étapes de la méthode TBL** 
 
 - ✅ **Test individuel (iRAT)** — chaque étudiant répond seul sur son téléphone
 - ✅ **Test en équipe (tRAT)** — feedback immédiat façon « carte à gratter » (4 / 2 / 1 / 0 point)
-- ✅ **Réclamations (appels)** — les équipes contestent avec justification, vous décidez
+- ✅ **Réclamations (appels)** — les équipes contestent avec justification ; passage automatique au feedback dès que toutes les équipes ont cliqué « Nous n'avons pas de réclamation »
 - ✅ **Feedback** — statistiques en direct pour cibler votre mini-cours
-- ✅ **Exercices d'application** — même problème pour tous, révélation simultanée des réponses
+- ✅ **Cas cliniques d'application** — chaque cas (énoncé + 3 à 5 QCU) s'affiche un par un ; les réponses sont enregistrées automatiquement au clic et **révélées automatiquement** dès que toutes les équipes ont répondu
 - ✅ **Évaluation par les pairs** — chaque étudiant note ses coéquipiers
-- ✅ **Résultats** — tableaux complets + export CSV pour Excel
+- ✅ **Résultats** — tableaux complets + export CSV pour Excel (formats « 10 sur 10 » insensibles à la conversion en date)
 - ✅ Installable sur l'écran d'accueil des téléphones (PWA), sans magasin d'applications
 
 ---
@@ -21,7 +21,7 @@ Application web gratuite qui déroule **toutes les étapes de la méthode TBL** 
 2. Donnez un titre, choisissez un **code PIN à 4 chiffres** (notez-le : il permet de retrouver votre séance depuis n'importe quel appareil), le nombre d'équipes et la durée du iRAT.
 3. Saisissez vos questions. Bouton **« Charger l'exemple »** pour découvrir le fonctionnement avec des questions toutes prêtes.
    - Questions **iRAT / tRAT** : questions de vérification de la préparation (utilisées deux fois : en individuel puis en équipe).
-   - Questions **Application** : problèmes complexes résolus en équipe avec révélation simultanée.
+   - **Cas cliniques d'application** : chaque cas a un titre, un énoncé (vignette du patient…) et 3 à 5 QCU. Ils sont affichés **un par un** aux équipes pendant la séance.
 4. Cliquez sur **« Créer la séance »** : un **code à 6 caractères** s'affiche en grand.
 
 ### Pendant la séance (le déroulé guidé)
@@ -33,16 +33,16 @@ L'application vous guide étape par étape. Le bouton vert en bas passe d'une é
 | 1. Accueil | Affichez le code au tableau | Ils saisissent le code + leur nom, choisissent leur équipe |
 | 2. iRAT | Surveillez la progression en direct | Chacun répond **seul** sur son téléphone |
 | 3. tRAT | Surveillez les scores des équipes | **Un téléphone par équipe** : ils discutent puis valident (4 / 2 / 1 / 0 pt) |
-| 4. Réclamations | Examinez puis acceptez/refusez | Les équipes écrivent leur contestation |
+| 4. Réclamations | Suivez le compteur « équipes ayant répondu » | Chaque équipe écrit ses contestations puis clique **« Nous n'avons pas de réclamation »** — quand toutes ont répondu, la phase suivante s'ouvre **automatiquement** |
 | 5. Feedback | Mini-cours ciblé sur les questions en rouge | Ils voient leurs résultats et les bonnes réponses |
-| 6. Application | Attendez toutes les équipes puis cliquez **« Révéler »** | Les équipes répondent au problème et justifient |
+| 6. Application | Suivez la révélation automatique (ou forcez-la) | Les équipes travaillent les **cas cliniques un par un** ; chaque réponse est enregistrée **automatiquement** au clic ; les réponses de chaque question sont **révélées automatiquement** dès que toutes les équipes ont répondu |
 | 7. Pairs | Vérifiez que tout le monde a soumis | Chacun note ses coéquipiers (1 à 5) |
-| 8. Terminé | Exportez le CSV pour vos notes | Ils voient leur bilan |
+| 8. Terminé | Exportez le CSV pour vos notes | Ils voient **leur note finale sur 20**, puis les réponses correctes |
 
 ### Après la séance
 - Onglet **« Résultats »** → tableau **« Note finale sur 20 »** en haut de la page : chaque étudiant voit sa note globale combinant **iRAT 25 % · tRAT 25 % · application 35 % · évaluation par les pairs 15 %**. Chaque partie est d'abord ramenée sur 20 (iRAT : 1 point par bonne réponse ; tRAT : barème 4/2/1/0 ; application : bonnes réponses de l'équipe ; pairs : moyenne reçue sur 5). Si une partie n'existe pas (aucun exercice d'application, évaluation manquante…), son poids est automatiquement redistribué sur les autres.
-- Les étudiants voient **leur propre note finale** sur l'écran de fin de séance, avec le détail des quatre parties.
-- Bouton **« Exporter tous les résultats (CSV) »** : un fichier Excel avec tout (détail question par question, notes /20 de chaque partie, note finale, réclamations, commentaires).
+- Les étudiants voient **uniquement leur note finale sur 20** sur l'écran de fin (sans détail), suivie des **réponses correctes** de toutes les questions.
+- Bouton **« Exporter tous les résultats (CSV) »** : un fichier Excel avec tout (détail question par question, notes /20 de chaque partie, note finale, réclamations, commentaires). Les scores s'écrivent « 10 sur 10 » (et non « 10/10 ») pour éviter qu'Excel les convertisse en dates (10-oct).
 - Pour reprendre une séance : **« Reprendre une séance »** avec le code + votre PIN.
 
 ---
@@ -112,6 +112,19 @@ L'application fonctionne déjà dans l'aperçu. Pour en disposer **en permanence
 - **Vercel Hobby** : gratuit pour un usage personnel/éducatif.
 - **Neon Free** : gratuit jusqu'à 0,5 Go de stockage (des années de séances TBL).
 - Aucune carte bancaire n'est demandée.
+
+### Mettre à jour une installation existante (après une amélioration de l'application)
+
+Quand vous recevez un nouveau fichier ZIP de mise à jour (par ex. `tbl-live-mise-a-jour.zip`) :
+
+1. **Extrayez** le ZIP sur votre ordinateur (clic droit → « Tout extraire »).
+2. Ouvrez votre dépôt **GitHub** dans le navigateur → **« Add file » → « Upload files »**.
+3. Glissez dans la fenêtre **tous les dossiers et fichiers extraits** (y compris `prisma` et `src` s'ils sont présents, ainsi que `README.md`). Le fichier « LISEZMOI » n'a pas besoin d'être envoyé.
+4. Cliquez sur **« Commit changes »**.
+5. **C'est tout.** Côté **Vercel** : le redéploiement est automatique (2-3 minutes, onglet « Deployments » → « Ready »). Côté **Neon** : rien à faire — les éventuels changements de base de données sont appliqués automatiquement pendant le déploiement Vercel.
+6. Sur les téléphones : fermez puis rouvrez l'application (ou rechargez deux fois) pour voir la nouvelle version.
+
+> ⚠️ N'utilisez que les fichiers du pack de mise à jour reçu — ne remettez pas en ligne l'ancien grand ZIP complet si votre dépôt contient déjà votre configuration Neon.
 
 ---
 

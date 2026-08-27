@@ -83,3 +83,34 @@ export function sanitizeQuestionInput(q: unknown): {
   if (!Number.isInteger(correct) || correct < 0 || correct >= choices.length) return null
   return { text, choices, correct, phase }
 }
+
+// Validation d'un cas clinique d'application (titre + énoncé + QCU).
+// Les questions sont forcées en phase « application ». Le titre est
+// obligatoire (repli : « Application N » si absent côté client).
+export function sanitizeCaseInput(
+  c: unknown
+): {
+  title: string
+  intro: string | null
+  questions: { text: string; choices: string[]; correct: number; phase: 'application' }[]
+} | null {
+  if (!c || typeof c !== 'object') return null
+  const obj = c as Record<string, unknown>
+  const title = typeof obj.title === 'string' ? obj.title.trim() : ''
+  const intro = typeof obj.intro === 'string' ? obj.intro.trim() : ''
+  const rawQuestions = Array.isArray(obj.questions) ? obj.questions : []
+  const questions: { text: string; choices: string[]; correct: number; phase: 'application' }[] = []
+  for (const rq of rawQuestions) {
+    const q = sanitizeQuestionInput(rq)
+    if (!q) return null // une seule QCU invalide invalide tout le cas
+    questions.push({ text: q.text, choices: q.choices, correct: q.correct, phase: 'application' })
+  }
+  if (!title || title.length > 200) return null
+  if (intro.length > 4000) return null
+  if (questions.length < 1 || questions.length > 10) return null
+  return {
+    title,
+    intro: intro.length > 0 ? intro : null,
+    questions,
+  }
+}

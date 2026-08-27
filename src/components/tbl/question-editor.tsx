@@ -5,10 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { LETTERS, type DraftQuestion, type QuestionPhase } from '@/lib/tbl-types'
+import { LETTERS, type DraftCase, type DraftQuestion, type QuestionPhase } from '@/lib/tbl-types'
 
 export function emptyQuestion(phase: QuestionPhase = 'rat'): DraftQuestion {
   return { text: '', choices: ['', '', '', ''], correct: 0, phase }
+}
+
+export function emptyCase(): DraftCase {
+  return { title: '', intro: '', questions: [emptyQuestion('application')] }
 }
 
 export function QuestionEditor({
@@ -18,6 +22,7 @@ export function QuestionEditor({
   onDelete,
   errors,
   prefix = 'Question',
+  hidePhaseToggle = false,
 }: {
   index: number
   value: DraftQuestion
@@ -25,6 +30,8 @@ export function QuestionEditor({
   onDelete?: () => void
   errors?: string[]
   prefix?: string
+  /** Masque le sélecteur iRAT/tRAT ↔ Application (structure imposée par le contexte) */
+  hidePhaseToggle?: boolean
 }) {
   const setChoice = (i: number, v: string) => {
     const choices = [...value.choices]
@@ -59,32 +66,34 @@ export function QuestionEditor({
           {prefix} {index + 1}
         </p>
         <div className="flex items-center gap-2">
-          <div className="flex overflow-hidden rounded-lg border border-stone-300 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => onChange({ ...value, phase: 'rat' })}
-              className={cn(
-                'px-2.5 py-1.5',
-                value.phase === 'rat'
-                  ? 'bg-amber-500 text-white'
-                  : 'bg-white text-stone-600 hover:bg-stone-50'
-              )}
-            >
-              iRAT / tRAT
-            </button>
-            <button
-              type="button"
-              onClick={() => onChange({ ...value, phase: 'application' })}
-              className={cn(
-                'px-2.5 py-1.5',
-                value.phase === 'application'
-                  ? 'bg-lime-600 text-white'
-                  : 'bg-white text-stone-600 hover:bg-stone-50'
-              )}
-            >
-              Application
-            </button>
-          </div>
+          {!hidePhaseToggle && (
+            <div className="flex overflow-hidden rounded-lg border border-stone-300 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => onChange({ ...value, phase: 'rat' })}
+                className={cn(
+                  'px-2.5 py-1.5',
+                  value.phase === 'rat'
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-white text-stone-600 hover:bg-stone-50'
+                )}
+              >
+                iRAT / tRAT
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ ...value, phase: 'application' })}
+                className={cn(
+                  'px-2.5 py-1.5',
+                  value.phase === 'application'
+                    ? 'bg-lime-600 text-white'
+                    : 'bg-white text-stone-600 hover:bg-stone-50'
+                )}
+              >
+                Application
+              </button>
+            </div>
+          )}
           {onDelete && (
             <Button
               type="button"
@@ -103,7 +112,7 @@ export function QuestionEditor({
       <p className="mb-1.5 text-xs font-medium text-stone-500">
         {value.phase === 'rat'
           ? 'Question de préparation (utilisée pour le test individuel PUIS le test en équipe)'
-          : "Exercice d'application (résolu en équipe, révélation simultanée des réponses)"}
+          : "QCU d'application (résolue en équipe au sein du cas clinique, révélation automatique dès que toutes les équipes ont répondu)"}
       </p>
 
       <Textarea
@@ -178,47 +187,70 @@ export function QuestionEditor({
   )
 }
 
-// Exemple prêt à l'emploi pour découvrir l'application
-export function exampleQuestions(): DraftQuestion[] {
-  return [
-    {
-      text: 'Quel est le rôle principal de la chlorophylle dans la photosynthèse ?',
-      choices: [
-        'Absorber la lumière du soleil',
-        'Fixer le carbone atmosphérique',
-        'Transporter la sève brute',
-        'Stocker l\u2019amidon',
-      ],
-      correct: 0,
-      phase: 'rat',
-    },
-    {
-      text: 'Quels gaz sont respectivement consommé et produit lors de la photosynthèse ?',
-      choices: [
-        'CO₂ consommé, O₂ produit',
-        'O₂ consommé, CO₂ produit',
-        'Azote consommé, O₂ produit',
-        'CO₂ consommé, hydrogène produit',
-      ],
-      correct: 0,
-      phase: 'rat',
-    },
-    {
-      text: 'Dans quelle partie de la cellule la photosynthèse a-t-elle principalement lieu ?',
-      choices: ['Les mitochondries', 'Le noyau', 'Les chloroplastes', 'La paroi cellulaire'],
-      correct: 2,
-      phase: 'rat',
-    },
-    {
-      text: 'Une plante est placée sous une lumière verte. Quelle sera sa croissance comparée à une plante sous lumière blanche, et pourquoi ?',
-      choices: [
-        'Meilleure : le vert est la couleur la plus énergétique',
-        'Identique : toutes les couleurs sont également utilisées',
-        'Moins bonne : le vert est majoritairement réfléchi, peu absorbé',
-        'Nulle : la photosynthèse est impossible sans lumière blanche',
-      ],
-      correct: 2,
-      phase: 'application',
-    },
-  ]
+// Exemple prêt à l'emploi pour découvrir l'application :
+// 3 questions de préparation + 1 cas clinique de 2 QCU.
+export function exampleContent(): { rat: DraftQuestion[]; cases: DraftCase[] } {
+  return {
+    rat: [
+      {
+        text: 'Quel est le rôle principal de la chlorophylle dans la photosynthèse ?',
+        choices: [
+          'Absorber la lumière du soleil',
+          'Fixer le carbone atmosphérique',
+          'Transporter la sève brute',
+          'Stocker l\u2019amidon',
+        ],
+        correct: 0,
+        phase: 'rat',
+      },
+      {
+        text: 'Quels gaz sont respectivement consommé et produit lors de la photosynthèse ?',
+        choices: [
+          'CO₂ consommé, O₂ produit',
+          'O₂ consommé, CO₂ produit',
+          'Azote consommé, O₂ produit',
+          'CO₂ consommé, hydrogène produit',
+        ],
+        correct: 0,
+        phase: 'rat',
+      },
+      {
+        text: 'Dans quelle partie de la cellule la photosynthèse a-t-elle principalement lieu ?',
+        choices: ['Les mitochondries', 'Le noyau', 'Les chloroplastes', 'La paroi cellulaire'],
+        correct: 2,
+        phase: 'rat',
+      },
+    ],
+    cases: [
+      {
+        title: 'Cas — Une plante sous lumière verte',
+        intro:
+          'Deux plants de tomate identiques sont placés côte à côte en laboratoire : le premier sous une lumière blanche, le second sous une lumière verte de même intensité. Après trois semaines, on compare leur croissance et leur production de matière sèche.',
+        questions: [
+          {
+            text: 'Comment sera la croissance de la plante sous lumière verte comparée à celle sous lumière blanche ?',
+            choices: [
+              'Meilleure : le vert est la couleur la plus énergétique',
+              'Identique : toutes les couleurs sont également utilisées',
+              'Moins bonne : le vert est majoritairement réfléchi, peu absorbé',
+              'Nulle : la photosynthèse est impossible sans lumière blanche',
+            ],
+            correct: 2,
+            phase: 'application',
+          },
+          {
+            text: 'Quelle mesure simple confirmerait que la photosynthèse est ralentie sous lumière verte ?',
+            choices: [
+              'Une baisse de la consommation d\u2019oxygène',
+              'Une baisse de l\u2019absorption de CO₂',
+              'Une hausse du dégagement d\u2019O₂ nocturne',
+              'Un jaunissement immédiat des feuilles',
+            ],
+            correct: 1,
+            phase: 'application',
+          },
+        ],
+      },
+    ],
+  }
 }

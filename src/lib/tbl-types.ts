@@ -19,6 +19,15 @@ export interface QuestionDTO {
   correct?: number
   phase: QuestionPhase
   order?: number
+  /** Cas clinique d'application (null = question RAT ou ancien format) */
+  caseId?: string | null
+}
+
+export interface CaseDTO {
+  id: string
+  title: string
+  intro: string | null
+  order: number
 }
 
 export interface PublicSessionDTO {
@@ -41,7 +50,8 @@ export interface DashboardDTO {
     createdAt: string
   }
   questions: QuestionDTO[]
-  teams: { id: string; name: string; number: number }[]
+  cases: CaseDTO[]
+  teams: { id: string; name: string; number: number; appealsDone: boolean }[]
   students: { id: string; name: string; teamId: string | null }[]
   iratAnswers: {
     questionId: string
@@ -83,6 +93,16 @@ export interface StudentStateDTO {
   teamMembers: { id: string; name: string }[]
   questions: QuestionDTO[]
   applicationQuestions: QuestionDTO[]
+  /** Cas cliniques d'application (phase application et fin de séance) */
+  appCases?: CaseDTO[]
+  /** Questions d'application dont les réponses sont révélées (auto ou forcée) */
+  revealedAppQuestionIds?: string[]
+  /** Phase application : progression des équipes par question (x/y ont répondu) */
+  appAnswerProgress?: { questionId: string; answered: number; total: number }[]
+  /** Phase réclamations : mon équipe a-t-elle signalé qu'elle n'a (plus) de réclamation ? */
+  myTeamAppealsDone?: boolean
+  /** Phase réclamations : progression des équipes (bouton « pas de réclamation ») */
+  appealsProgress?: { done: number; total: number }
   myIratAnswers: { questionId: string; choice: number; isCorrect?: boolean; score?: number }[]
   teamTratAnswers: {
     questionId: string
@@ -105,6 +125,39 @@ export interface DraftQuestion {
   choices: string[]
   correct: number
   phase: QuestionPhase
+}
+
+/** Brouillon d'un cas clinique d'application (formulaire de création) */
+export interface DraftCase {
+  title: string
+  intro: string
+  questions: DraftQuestion[]
+}
+
+// ---------------------------------------------------------------
+// Révélation automatique des réponses d'application :
+// une question est révélée dès que TOUTES les équipes actives
+// (équipes comptant au moins un étudiant) y ont répondu,
+// ou immédiatement si l'enseignant force la révélation.
+// ---------------------------------------------------------------
+export function computeRevealedAppQuestionIds(input: {
+  appQuestionIds: string[]
+  /** ids des équipes actives (au moins 1 étudiant) */
+  activeTeamIds: string[]
+  appAnswers: { teamId: string; questionId: string }[]
+  forcedReveal: boolean
+}): string[] {
+  if (input.forcedReveal) return [...input.appQuestionIds]
+  if (input.activeTeamIds.length === 0) return []
+  const answered = new Map<string, Set<string>>()
+  for (const a of input.appAnswers) {
+    if (!answered.has(a.questionId)) answered.set(a.questionId, new Set())
+    answered.get(a.questionId)!.add(a.teamId)
+  }
+  return input.appQuestionIds.filter((qid) => {
+    const teams = answered.get(qid)
+    return !!teams && input.activeTeamIds.every((tid) => teams.has(tid))
+  })
 }
 
 export const PHASE_ORDER: Phase[] = [
@@ -147,7 +200,7 @@ export const PHASE_INFO: Record<
     label: 'Réclamations (appels)',
     short: 'Réclamations',
     teacherHint:
-      'Les équipes peuvent contester une réponse avec une justification. Examinez chaque réclamation puis acceptez ou refusez.',
+      'Les équipes peuvent contester une réponse avec une justification. La phase passe automatiquement au feedback dès que toutes les équipes ont cliqué sur « Nous n\u2019avons pas de réclamation » (ou envoyé leurs réclamations puis clôturé). Vous pouvez aussi avancer manuellement.',
     studentHint: 'Votre équipe peut contester une réponse jugée ambiguë.',
   },
   feedback: {
@@ -158,11 +211,11 @@ export const PHASE_INFO: Record<
     studentHint: 'Écoutez les explications de votre professeur.',
   },
   application: {
-    label: 'Exercices d\u2019application',
+    label: 'Cas cliniques d\u2019application',
     short: 'Application',
     teacherHint:
-      'Toutes les équipes travaillent le même problème et choisissent une réponse. Révélez les réponses simultanément pour lancer le débat.',
-    studentHint: 'Travaillez le problème en équipe et choisissez une réponse.',
+      'Les équipes travaillent les cas cliniques un par un (3 à 5 QCU par cas). Les réponses de chaque question sont révélées automatiquement dès que toutes les équipes y ont répondu — vous pouvez aussi forcer la révélation.',
+    studentHint: 'Travaillez chaque cas clinique en équipe et choisissez vos réponses.',
   },
   peer: {
     label: 'Évaluation par les pairs',
