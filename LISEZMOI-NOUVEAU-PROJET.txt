@@ -1,0 +1,176 @@
+TBL LIVE — VERSION 2.2.0 — NOUVEAU PROJET GITHUB
+===============================================
+
+NOUVEAU : ONGLET « STATISTIQUES » (ANALYSE DOCIMOLOGIQUE COMPLÈTE)
+-------------------------------------------------------------------
+Un nouvel onglet apparaît dans votre tableau de bord enseignant, à côté
+de « Résultats » : il calcule AUTOMATIQUEMENT, à chaque moment de la
+séance (et en totalité à la fin), les indicateurs classiques de la
+théorie des tests sur toutes vos questions — iRAT, tRAT, exercices
+d'application et cas cliniques :
+- Indice de difficulté (p) : % de réussite de chaque question ;
+- Indice de discrimination (D, groupes extrêmes 27 %) et corrélation
+  point-bisériale (r pbs) : est-ce que la question sépare les forts
+  des faibles ? ;
+- Fidélité de l'ensemble (KR-20 / alpha de Cronbach) et erreur
+  standard de mesure (SEM) ;
+- Analyse des distracteurs : répartition des choix A/B/C/D, avec
+  repérage des distracteurs jamais choisis (à réécrire) ;
+- tRAT : réussite au 1er essai, réussite finale, points moyens,
+  répartition des équipes à 4 / 2 / 1 / 0 point (barème IF-AT) ;
+- « Effet équipe » : comparaison question par question entre la
+  réussite individuelle (iRAT) et celle des équipes (tRAT) ;
+- « Questions à revoir » : signalement automatique des questions
+  problématiques (trop faciles, trop difficiles, peu discriminantes,
+  distracteur inutile) — très utile pour préparer la séance suivante.
+Un glossaire dépliable « Comprendre les indices docimologiques »
+explique chaque indicateur en français simple, avec les seuils
+usuels. Un bouton « Exporter l'analyse docimologique complète »
+génère un fichier CSV qui s'ouvre directement dans Excel (tableaux
+prêts pour vos rapports ou votre conseil pédagogique).
+
+CORRECTIFS DES VERSIONS 2.1.1 ET 2.1.2 (si votre déploiement a échoué)
+-----------------------------------------------------------------------
+Deux défauts des anciens paquets provoquaient l'échec « Error: Command
+"npm run build" exited with 1 » sur Vercel. Ils sont réglés :
+1. (v2.1.1) prisma/schema.prisma est PRÉ-CONFIGURÉ pour PostgreSQL (Neon) :
+   l'ancienne manipulation manuelle « sqlite » → « postgresql » sur GitHub
+   n'existe plus. Si vous n'aviez pas fait cette modification, le build
+   échouait au moment de créer les tables.
+2. (v2.1.2) le mode « application autonome » (prévu pour le fonctionnement
+   local hors Internet) est désormais désactivé AUTOMATIQUEMENT sur Vercel.
+   Avec les versions récentes de Next.js, ce mode bloquait la fin du build
+   Vercel avec le message « ENOENT … .next/next-server.js.nft.json ».
+   Les versions exactes des logiciels sont en plus verrouillées par le
+   fichier package-lock.json : Vercel installe exactement ce qui a été testé.
+
+Résultat : déposez les fichiers, réglez DATABASE_URL, cliquez Deploy —
+les tables se créent toutes seules au premier déploiement. C'est tout.
+
+VOUS AVEZ DÉJÀ CRÉÉ LE DÉPÔT AVEC UN ANCIEN ZIP (v2.1, v2.1.1 ou v2.1.2) ?
+-------------------------------------------------------------------
+C'est le cas le plus simple : sur GitHub, « Add file » → « Upload files »
+→ glissez le CONTENU de ce ZIP v2.2.0 (tous les fichiers et dossiers
+extraits) → « Commit changes ». Vercel relance le déploiement tout seul
+(2-3 min). Les fichiers remplacent les anciens, y compris les
+correctifs ci-dessus ET le nouvel onglet Statistiques (aucun réglage,
+aucune manipulation de base de données : les statistiques se calculent
+à partir des réponses déjà enregistrées).
+
+Cette version renforce la sécurité, la flexibilité et la gestion du
+cycle de vie de vos séances. Ce ZIP contient UNIQUEMENT les fichiers
+nécessaires à l'exécution de l'application (le code inutile laissé par
+le gabarit de départ a été supprimé, de même que les ~25 dépendances
+non utilisées).
+
+NOUVEAUTÉS DE LA VERSION 2.1 (gestion des séances)
+---------------------------------------------------
+1. Suppression sécurisée : le bouton « Supprimer » du tableau de bord
+   demande une CONFIRMATION. La séance part alors dans une corbeille :
+   les étudiants n'y ont plus accès, mais vous pouvez la RESTAURER pendant
+   48 heures (bouton « Restaurer la séance ») en cas d'erreur. Passé ce
+   délai, elle est effacée définitivement ; une suppression immédiate est
+   aussi possible (double confirmation).
+2. Duplication : le bouton « Dupliquer » crée une copie prête à l'emploi
+   de la séance — mêmes questions iRAT/tRAT, mêmes cas cliniques, même
+   nombre d'équipes — SANS les données des étudiants. La copie s'ouvre
+   avec son nouveau code et le PIN choisi. Idéal pour réutiliser une
+   séance d'une année sur l'autre.
+3. Purge automatique (rétention 4 mois) : 4 mois après sa création, les
+   données étudiantes d'une séance (noms, réponses, réclamations,
+   évaluations) sont effacées automatiquement dès que vous la rouvrez.
+   Les QCM et cas cliniques sont conservés (et restent dupliquables) :
+   votre base reste légère et les données personnelles ne s'accumulent
+   pas.
+
+(AUSSI INCLUS, HÉRITÉS DE LA VERSION 2)
+----------------------------------------
+- PIN enseignant complexe (6 caractères min, bouton « Générer ») avec
+  verrouillage 15 min après 5 tentatives incorrectes.
+- Code de reprise personnel pour chaque étudiant (fini l'usurpation par
+  prénom et les homonymes qui s'éjectent).
+- Nombre d'équipes de 2 à 50 ; réponse iRAT unique garantie par la base ;
+  export CSV protégé contre les formules et la conversion en dates ;
+  zoom tactile réactivé ; TypeScript vérifié au build.
+
+MISE EN SERVICE DANS UN NOUVEAU PROJET GITHUB (première installation)
+----------------------------------------------------------------------
+Suivez les étapes A à E du README.md inclus (comme pour votre première
+installation) :
+
+  Étape A — Compte GitHub (si vous en avez déjà un, passez à B).
+  Étape B — Créez un NOUVEAU dépôt (repository) GitHub, par exemple
+            « tbl-live-v2 », puis glissez-déposez le CONTENU de ce ZIP
+            (tous les fichiers et dossiers extraits) via
+            « Add file » → « Upload files » → « Commit changes ».
+  Étape C — Créez un NOUVEAU projet sur https://neon.com (Sign up avec
+            GitHub, « Create project », région proche de vous) et copiez
+            la chaîne de connexion PostgreSQL.
+  Étape D — Sur https://vercel.com (« Continue with GitHub ») :
+            « Add New… » → « Project » → Importez le dépôt tbl-live-v2.
+            AVANT de déployer, ajoutez la variable d'environnement :
+              Key   : DATABASE_URL
+              Value : la chaîne de connexion Neon copiée à l'étape C
+            puis « Deploy » (2-3 minutes).
+            ✔ Plus RIEN à modifier dans les fichiers : la base est déjà
+            configurée pour Neon (PostgreSQL) et ses tables se créent
+            toutes seules pendant le déploiement.
+  Étape E — Ouvrez l'adresse https://tbl-live-v2-xxxx.vercel.app :
+            c'est la NOUVELLE adresse à donner à vos étudiants.
+
+Important : créez un NOUVEAU projet Neon (base vierge) pour cette
+version — ne réutilisez pas la chaîne de connexion de l'ancienne
+installation : la structure de la base a évolué et doit partir d'une
+base neuve. L'ancienne application peut rester en ligne le temps de
+valider la nouvelle ; vous pourrez ensuite la supprimer sur Vercel
+(Paramètres du projet → Delete) pour éviter tout risque de confusion
+entre les deux adresses.
+
+SI LE DÉPLOIEMENT ÉCHOUE (« Error: Command "npm run build" exited with 1 »)
+---------------------------------------------------------------------------
+1. Erreur au DÉBUT du build (par ex. « Validation Error », « error: Env
+   var not found: DATABASE_URL », « P1001 ») : vérifiez DATABASE_URL dans
+   Vercel — votre projet → onglet « Settings » → « Environment Variables »
+   → il doit y avoir DATABASE_URL avec la chaîne du NOUVEAU projet Neon
+   (elle commence par postgresql:// et se termine par ?sslmode=require).
+   Après l'avoir ajoutée ou corrigée : onglet « Deployments » → menu « … »
+   du déploiement → « Redeploy ». Vérifiez aussi sur GitHub que
+   prisma/schema.prisma contient bien : provider = "postgresql"
+   (automatique avec ce ZIP v2.2.0).
+2. Erreur à la FIN du build (« ENOENT … .next/next-server.js.nft.json ») :
+   corrigée par la v2.1.2 — assurez-vous que le dossier « scripts/ » et le
+   fichier « package-lock.json » ont bien été téléversés sur GitHub
+   (présents dans ce ZIP), puis « Redeploy ».
+3. N'utilisez pas la chaîne de l'ANCIEN projet Neon : créez un projet
+   Neon neuf comme indiqué à l'étape C.
+4. Si l'échec persiste : onglet « Deployments » → cliquez sur le
+   déploiement en erreur → « Building » → repérez les dernières lignes
+   rouges du journal et transmettez-les : elles permettent un diagnostic
+   exact.
+
+CÔTÉ VERCEL ET NEON, ENSUITE ?
+------------------------------
+- Rien à faire manuellement : à chaque « Commit changes » sur GitHub,
+  Vercel redéploie automatiquement (2-3 min) et applique les éventuelles
+  évolutions de la base de données à Neon tout seul.
+- La purge des données étudiantes et le vidage de la corbeille se font
+  tout seuls quand vous ouvrez vos séances : aucun réglage à faire.
+- Sur les téléphones : fermer puis rouvrir l'application installée pour
+  voir la nouvelle version (ou recharger deux fois).
+
+POUR ESSAYER LOCALEMENT SUR VOTRE ORDINATEUR (optionnel, sans Internet)
+------------------------------------------------------------------------
+1. Installez Node.js (version LTS) depuis https://nodejs.org.
+2. Décompressez ce ZIP dans un dossier, ouvrez un terminal dans ce dossier.
+3. Dans prisma/schema.prisma, remplacez « postgresql » par « sqlite »
+   (une seule ligne, le temps du test local — ce dossier ne servira qu'en
+   local, il ne touche ni GitHub ni Neon).
+4. Créez le fichier .env contenant la ligne :  DATABASE_URL="file:./dev.db"
+   (sous PowerShell : Set-Content -Path .env -Value 'DATABASE_URL="file:./dev.db"')
+5. Tapez :  npm install   puis :  npm run build
+   (fonctionne désormais aussi sous Windows, les copies de fichiers sont
+   faites par un petit programme multiplateforme)
+6. Lancez :  node .next/standalone/server.js
+   puis ouvrez http://localhost:3000 dans votre navigateur.
+
+Bonne séance TBL !

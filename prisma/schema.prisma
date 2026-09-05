@@ -1,0 +1,195 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Pré-configuré pour Neon (PostgreSQL) — version en ligne.
+// Pour un essai LOCAL hors ligne uniquement : remplacez
+// « postgresql » par « sqlite » puis suivez la section « mode
+// local » du LISEZMOI.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// TBL Live — Team-Based Learning
+// Une Session = une séance TBL complète (iRAT, tRAT,
+// réclamations, application, évaluation par les pairs)
+// ============================================================
+
+model Session {
+  id            String   @id @default(cuid())
+  code          String   @unique // code à 6 caractères pour rejoindre
+  title         String
+  teacherPin    String // code PIN enseignant (6 caractères et plus, lettres + chiffres)
+  teacherToken  String // jeton secret enseignant (accès tableau de bord)
+  status        String   @default("lobby") // lobby | irat | trat | appeal | feedback | application | peer | finished
+  iratMinutes   Int      @default(10) // durée conseillée du iRAT
+  phaseStartedAt DateTime @default(now()) // début de la phase en cours
+  revealed      Boolean  @default(false) // révélation simultanée des réponses d'application
+  // Protection anti force-brute du PIN enseignant (Vercel est serverless :
+  // la mémoire ne persiste pas entre les requêtes, on stocke donc en base).
+  // 5 tentatives fausses → verrouillage temporaire de 15 minutes.
+  pinAttempts    Int      @default(0)
+  pinLockedUntil DateTime?
+  // Corbeille : suppression « douce » demandée par l'enseignant. Les étudiants
+  // perdent immédiatement l'accès ; l'enseignant peut restaurer la séance
+  // pendant 48 h ; au-delà, elle est supprimée définitivement.
+  deletedAt      DateTime?
+  // Purge automatique : 4 mois après la création, les données produites par
+  // les étudiants (noms, réponses, réclamations, évaluations par les pairs)
+  // sont effacées — la séance (QCM, cas cliniques, réglages) est conservée.
+  dataPurgedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  teams    Team[]
+  students Student[]
+  questions Question[]
+  cases    Case[]
+  appeals  Appeal[]
+  peerEvals PeerEval[]
+}
+
+// Cas clinique d'application : un énoncé + 3 à 5 QCU résolues en équipe.
+// L'affichage étudiant se fait un cas à la fois.
+model Case {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  title     String  // ex. « Cas clinique — Mme A., 62 ans »
+  intro     String? // énoncé / vignette du cas
+  order     Int     @default(0)
+
+  questions Question[]
+
+  @@index([sessionId])
+}
+
+model Team {
+  id        String @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name      String // "Équipe 1", ...
+  number    Int
+  // L'équipe a signalé qu'elle n'a (plus) de réclamation : quand toutes les
+  // équipes actives ont répondu, la phase passe automatiquement au feedback.
+  appealsDone Boolean @default(false)
+
+  students   Student[]
+  answers    Answer[] // réponses tRAT (par équipe)
+  appeals    Appeal[]
+  appAnswers AppAnswer[]
+}
+
+model Student {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  teamId    String?
+  team      Team?    @relation(fields: [teamId], references: [id])
+  name      String
+  token     String   @unique // jeton étudiant (persistance sur son appareil)
+  // Code de reprise personnel (6 caractères) : affiché à l'étudiant après
+  // sa première connexion, il permet de récupérer sa séance sur un autre
+  // appareil sans pouvoir usurper le compte d'un camarade homonyme.
+  recoveryCode String  @default("")
+  createdAt DateTime @default(now())
+
+  answers   Answer[] // réponses iRAT (individuelles)
+  peerGiven PeerEval[] @relation("evaluator")
+  peerReceived PeerEval[] @relation("evaluated")
+
+  @@index([sessionId])
+  @@index([teamId])
+}
+
+model Question {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  text      String
+  choices   String // JSON : ["choix A", "choix B", ...]
+  correct   Int // index de la bonne réponse
+  phase     String  @default("rat") // rat (iRAT + tRAT) | application
+  order     Int     @default(0)
+  caseId    String? // cas clinique d'application (null = ancien format / question RAT)
+  case      Case?   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  answers    Answer[]
+  appeals    Appeal[]
+  appAnswers AppAnswer[]
+
+  @@index([sessionId])
+}
+
+model Answer {
+  id         String   @id @default(cuid())
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  // iRAT : étudiant renseigné ; tRAT : équipe renseignée
+  studentId  String?
+  student    Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teamId     String?
+  team       Team?    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  kind       String // irat | trat
+  choice     Int
+  attempt    Int      @default(1) // tentative (tRAT : 1 à 4)
+  isCorrect  Boolean
+  score      Float    @default(0) // iRAT : 1 pt ; tRAT : 4 / 2 / 1 / 0
+  createdAt  DateTime @default(now())
+
+  // Une seule réponse iRAT par (étudiant, question) : les tentatives tRAT
+  // (studentId = null, NULL ≠ NULL en SQL) ne sont pas affectées. Empêche
+  // le double comptage d'une réponse iRAT lors de requêtes concurrentes.
+  @@unique([studentId, questionId, kind])
+
+  @@index([questionId])
+  @@index([studentId])
+  @@index([teamId])
+}
+
+model Appeal {
+  id         String   @id @default(cuid())
+  sessionId  String
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text       String // justification de l'équipe
+  status     String   @default("pending") // pending | accepted | rejected
+  createdAt  DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+model AppAnswer {
+  id         String   @id @default(cuid())
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  choice     Int
+  text       String? // justification de l'équipe
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([teamId, questionId])
+}
+
+model PeerEval {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  evaluatorId String
+  evaluator   Student  @relation("evaluator", fields: [evaluatorId], references: [id], onDelete: Cascade)
+  evaluatedId String
+  evaluated   Student  @relation("evaluated", fields: [evaluatedId], references: [id], onDelete: Cascade)
+  score       Int // 1 à 5
+  comment     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([evaluatorId, evaluatedId])
+  @@index([sessionId])
+}
