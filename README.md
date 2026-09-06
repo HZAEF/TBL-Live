@@ -73,72 +73,85 @@ L'icône apparaît alors comme une vraie application, en plein écran.
 
 ---
 
-## 3. Héberger l'application GRATUITEMENT et définitivement
+## 3. MISE EN SERVICE DANS UN NOUVEAU PROJET GITHUB (première installation)
+----------------------------------------------------------------------
+Suivez les étapes A à E du README.md inclus (comme pour votre première
+installation) :
 
-L'application fonctionne déjà dans l'aperçu. Pour en disposer **en permanence**, hébergez-la gratuitement sur **Vercel** (avec une base de données **Neon**, gratuite elle aussi). Comptez **30 à 40 minutes**, une seule fois. Aucune connaissance technique n'est nécessaire : suivez simplement les clics.
+  Étape A — Compte GitHub (si vous en avez déjà un, passez à B).
+  Étape B — Créez un NOUVEAU dépôt (repository) GitHub, par exemple
+            « tbl-live-v2 », puis glissez-déposez le CONTENU de ce ZIP
+            (tous les fichiers et dossiers extraits) via
+            « Add file » → « Upload files » → « Commit changes ».
+  Étape C — Créez un NOUVEAU projet sur https://neon.com (Sign up avec
+            GitHub, « Create project », région proche de vous) et copiez
+            la chaîne de connexion PostgreSQL.
+  Étape D — Sur https://vercel.com (« Continue with GitHub ») :
+            « Add New… » → « Project » → Importez le dépôt tbl-live-v2.
+            AVANT de déployer, ajoutez la variable d'environnement :
+              Key   : DATABASE_URL
+              Value : la chaîne de connexion Neon copiée à l'étape C
+            puis « Deploy » (2-3 minutes).
+            ✔ Plus RIEN à modifier dans les fichiers : la base est déjà
+            configurée pour Neon (PostgreSQL) et ses tables se créent
+            toutes seules pendant le déploiement.
+  Étape E — Ouvrez l'adresse https://tbl-live-v2-xxxx.vercel.app :
+            c'est la NOUVELLE adresse à donner à vos étudiants.
 
-### Étape A — Créer un compte GitHub (2 min)
-1. Allez sur **https://github.com/signup**.
-2. Créez votre compte (email + mot de passe).
+Important : créez un NOUVEAU projet Neon (base vierge) pour cette
+version — ne réutilisez pas la chaîne de connexion de l'ancienne
+installation : la structure de la base a évolué et doit partir d'une
+base neuve. L'ancienne application peut rester en ligne le temps de
+valider la nouvelle ; vous pourrez ensuite la supprimer sur Vercel
+(Paramètres du projet → Delete) pour éviter tout risque de confusion
+entre les deux adresses.
 
-### Étape B — Déposer le code sur GitHub (5 min)
-1. Connectez-vous, cliquez en haut à droite sur **« + »** → **« New repository »**.
-2. Nommez-le par exemple `tbl-live`, laissez tout par défaut, cliquez **« Create repository »**.
-3. Sur la page suivante, cliquez sur **« uploading an existing file »** (lien au-dessus de la zone vide).
-4. Glissez-déposez le **contenu du dossier décompressé** `tbl-live-v2-1-1-nouveau-projet.zip` (tous les fichiers et dossiers extraits — le dossier `node_modules` n'y figure pas, tout est prêt à déposer).
-5. Cliquez sur **« Commit changes »**.
+SI LE DÉPLOIEMENT ÉCHOUE (« Error: Command "npm run build" exited with 1 »)
+---------------------------------------------------------------------------
+1. Erreur au DÉBUT du build (par ex. « Validation Error », « error: Env
+   var not found: DATABASE_URL », « P1001 ») : vérifiez DATABASE_URL dans
+   Vercel — votre projet → onglet « Settings » → « Environment Variables »
+   → il doit y avoir DATABASE_URL avec la chaîne du NOUVEAU projet Neon
+   (elle commence par postgresql:// et se termine par ?sslmode=require).
+   Après l'avoir ajoutée ou corrigée : onglet « Deployments » → menu « … »
+   du déploiement → « Redeploy ». Vérifiez aussi sur GitHub que
+   prisma/schema.prisma contient bien : provider = "postgresql"
+   (automatique avec ce ZIP v2.2.0).
+2. Erreur à la FIN du build (« ENOENT … .next/next-server.js.nft.json ») :
+   corrigée par la v2.1.2 — assurez-vous que le dossier « scripts/ » et le
+   fichier « package-lock.json » ont bien été téléversés sur GitHub
+   (présents dans ce ZIP), puis « Redeploy ».
+3. N'utilisez pas la chaîne de l'ANCIEN projet Neon : créez un projet
+   Neon neuf comme indiqué à l'étape C.
+4. Si l'échec persiste : onglet « Deployments » → cliquez sur le
+   déploiement en erreur → « Building » → repérez les dernières lignes
+   rouges du journal et transmettez-les : elles permettent un diagnostic
+   exact.
 
-### Étape C — Créer la base de données gratuite sur Neon (5 min)
-1. Allez sur **https://neon.com** → **« Sign up »** (avec GitHub, c'est le plus simple).
-2. Dans votre espace : **« Create project »** → nommez-le `tbl-live` → région au plus près de chez vous → **« Create »**.
-3. Sur la page du projet, cherchez la **chaîne de connexion** (bouton **« Connect »** ou « Connection string »). Elle ressemble à :
-   `postgresql://neondb_owner:xxxx@ep-xxx.eu-central-1.aws.neon.tech/neondb?sslmode=require`
-4. **Copiez-la** et gardez-la (elle servira à l'étape D).
+CÔTÉ VERCEL ET NEON, ENSUITE ?
+------------------------------
+- Rien à faire manuellement : à chaque « Commit changes » sur GitHub,
+  Vercel redéploie automatiquement (2-3 min) et applique les éventuelles
+  évolutions de la base de données à Neon tout seul.
+- La purge des données étudiantes et le vidage de la corbeille se font
+  tout seuls quand vous ouvrez vos séances : aucun réglage à faire.
+- Sur les téléphones : fermer puis rouvrir l'application installée pour
+  voir la nouvelle version (ou recharger deux fois).
 
-### Étape D — Déployer sur Vercel (10 min)
-1. Allez sur **https://vercel.com** → **« Sign Up »** → **« Continue with GitHub »**.
-2. Cliquez sur **« Add New… »** → **« Project »**.
-3. Votre dépôt `tbl-live` apparaît : cliquez **« Import »**.
-4. **Avant de déployer**, ouvrez la section **« Environment Variables »** et ajoutez :
-   - **Key** (nom) : `DATABASE_URL`
-   - **Value** (valeur) : la chaîne de connexion Neon copiée à l'étape C.
-   - Cliquez **« Add »**.
-5. Cliquez sur **« Deploy »** et attendez 2-3 minutes.
-6. 🎉 Votre application est en ligne ! Vercel vous donne une adresse du type
-   `https://tbl-live-xxxx.vercel.app` — c'est **cette adresse** que vous donnerez à vos étudiants.
-
-> ℹ️ Depuis la version 2.1.1, **plus aucune modification de fichier n'est nécessaire** : le fichier
-> `prisma/schema.prisma` est déjà configuré pour PostgreSQL (Neon), et les tables de la base se
-> créent toutes seules pendant le premier déploiement.
-
-### Étape E — Vérifier (2 min)
-1. Ouvrez l'adresse Vercel : l'application doit s'afficher.
-2. Créez une séance de test, puis vérifiez dans Neon que les tables sont apparues.
-
-### Si le déploiement échoue (« Error: Command "npm run build" exited with 1 »)
-1. **Vérifiez `DATABASE_URL`** dans Vercel : votre projet → onglet **« Settings »** → **« Environment Variables »** → il doit exister une ligne `DATABASE_URL` dont la valeur est la chaîne de connexion **du projet Neon créé à l'étape C** (elle commence par `postgresql://` et finit par `?sslmode=require`). Après l'avoir ajoutée ou corrigée, relancez : onglet **« Deployments »** → menu **« … »** du déploiement → **« Redeploy »**.
-2. **Vérifiez le schéma** sur GitHub : ouvrez `prisma/schema.prisma` dans le dépôt — il doit contenir la ligne `provider = "postgresql"` (automatique depuis la v2.1.1 ; avec les anciens ZIP, cette ligne devait être modifiée à la main, et son oubli faisait échouer le build exactement avec ce message).
-3. **Erreur « ENOENT … .next/next-server.js.nft.json »** en fin de build : ce problème est corrigé par la **version 2.1.2** (le mode « local autonome » est désormais désactivé automatiquement sur Vercel, et les versions des logiciels sont verrouillées dans le fichier `package-lock.json`). Téléversez le contenu du ZIP v2.1.2 sur votre dépôt GitHub pour le régler définitivement.
-4. **N'utilisez pas** la chaîne de connexion de l'ancien projet Neon : la structure de la base a évolué, il faut une base neuve (étape C).
-5. Si l'échec persiste : onglet **« Deployments »** → cliquez sur le déploiement en erreur → **« Building »** → repérez les dernières lignes rouges du journal, et transmettez-les pour un diagnostic précis.
-
-### Coût : 0 €
-- **Vercel Hobby** : gratuit pour un usage personnel/éducatif.
-- **Neon Free** : gratuit jusqu'à 0,5 Go de stockage (des années de séances TBL).
-- Aucune carte bancaire n'est demandée.
-
-### Mettre à jour une installation existante (après une amélioration de l'application)
-
-Quand vous recevez un nouveau fichier ZIP de mise à jour (par ex. `tbl-live-mise-a-jour.zip`) :
-
-1. **Extrayez** le ZIP sur votre ordinateur (clic droit → « Tout extraire »).
-2. Ouvrez votre dépôt **GitHub** dans le navigateur → **« Add file » → « Upload files »**.
-3. Glissez dans la fenêtre **tous les dossiers et fichiers extraits** (y compris `prisma` et `src` s'ils sont présents, ainsi que `README.md`). Le fichier « LISEZMOI » n'a pas besoin d'être envoyé.
-4. Cliquez sur **« Commit changes »**.
-5. **C'est tout.** Côté **Vercel** : le redéploiement est automatique (2-3 minutes, onglet « Deployments » → « Ready »). Côté **Neon** : rien à faire — les éventuels changements de base de données sont appliqués automatiquement pendant le déploiement Vercel.
-6. Sur les téléphones : fermez puis rouvrez l'application (ou rechargez deux fois) pour voir la nouvelle version.
-
-> ⚠️ N'utilisez que les fichiers du pack de mise à jour reçu — ne remettez pas en ligne l'ancien grand ZIP complet si votre dépôt contient déjà votre configuration Neon.
+POUR ESSAYER LOCALEMENT SUR VOTRE ORDINATEUR (optionnel, sans Internet)
+------------------------------------------------------------------------
+1. Installez Node.js (version LTS) depuis https://nodejs.org.
+2. Décompressez ce ZIP dans un dossier, ouvrez un terminal dans ce dossier.
+3. Dans prisma/schema.prisma, remplacez « postgresql » par « sqlite »
+   (une seule ligne, le temps du test local — ce dossier ne servira qu'en
+   local, il ne touche ni GitHub ni Neon).
+4. Créez le fichier .env contenant la ligne :  DATABASE_URL="file:./dev.db"
+   (sous PowerShell : Set-Content -Path .env -Value 'DATABASE_URL="file:./dev.db"')
+5. Tapez :  npm install   puis :  npm run build
+   (fonctionne désormais aussi sous Windows, les copies de fichiers sont
+   faites par un petit programme multiplateforme)
+6. Lancez :  node .next/standalone/server.js
+   puis ouvrez http://localhost:3000 dans votre navigateur.
 
 ---
 
@@ -167,13 +180,4 @@ Quand vous recevez un nouveau fichier ZIP de mise à jour (par ex. `tbl-live-mis
 **Les données sont-elles privées ?** Les séances ne sont accessibles qu'avec le code à 6 caractères, et le tableau de bord enseignant est protégé par votre PIN (verrouillage automatique après 5 tentatives incorrectes). Deux élèves homonymes ne peuvent pas « s'éjecter » : chacun garde son compte grâce à son code de reprise. N'utilisez pas de données sensibles dans les questions. Aucune donnée n'est partagée avec des tiers.
 
 ---
-
-## 5. Pour les curieux : la technologie
-
-- **Next.js 16** (React 19, TypeScript) — application web
-- **Prisma + PostgreSQL** (Neon) — base de données
-- **Tailwind CSS + shadcn/ui** — interface
-- **PWA** (manifest + icônes) — installation sur mobile sans magasin d'applications
-- Interface 100 % en français, pensée mobile d'abord
-
 Bonne séance TBL ! 🎓
