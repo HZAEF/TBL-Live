@@ -48,6 +48,8 @@ model Session {
   cases    Case[]
   appeals  Appeal[]
   peerEvals PeerEval[]
+  // v2.6.0 : questionnaire de fin de séance (TBL-SAI) propre à la séance
+  saiItems  SaiItem[]
 }
 
 // Cas clinique d'application : un énoncé + 3 à 5 QCU résolues en équipe.
@@ -92,7 +94,15 @@ model Student {
   // Code de reprise personnel (6 caractères) : affiché à l'étudiant après
   // sa première connexion, il permet de récupérer sa séance sur un autre
   // appareil sans pouvoir usurper le compte d'un camarade homonyme.
+  // v2.6.0 : à la création, l'étudiant CHOISIT lui-même ce code (4 caractères
+  // et plus, chiffres/lettres) — les comptes antérieurs gardent leur code
+  // généré automatiquement (6 caractères), parfaitement compatible.
   recoveryCode String  @default("")
+  // v2.6.0 — questionnaire TBL-SAI : date de soumission (null = pas encore
+  // répondu → la note finale et le rang restent masqués) et commentaire
+  // libre facultatif transmis avec les réponses.
+  saiCompletedAt DateTime?
+  saiComment     String?
   createdAt DateTime @default(now())
 
   answers   Answer[] // réponses iRAT (individuelles)
@@ -100,6 +110,8 @@ model Student {
   peerReceived PeerEval[] @relation("evaluated")
   // v2.5.0 : signalements anti-capture (capture suspectée / sortie d'application)
   alerts    AlertEvent[]
+  // v2.6.0 : réponses au questionnaire de fin de séance (TBL-SAI)
+  saiResponses SaiResponse[]
 
   @@index([sessionId])
   @@index([teamId])
@@ -224,4 +236,55 @@ model AlertEvent {
   createdAt DateTime @default(now())
 
   @@index([studentId, kind, createdAt])
+}
+
+// ============================================================
+// v2.6.0 — Questionnaire de fin de séance (TBL-SAI)
+// Team-Based Learning Student Assessment Instrument
+// (© 2010 Heidi A. Mennenga — 33 items standard, 3 sous-échelles).
+// Chaque séance possède SA propre copie des items : la création de
+// séance sème les 33 items standard (textKey → traductions i18n des
+// 7 langues de l'application) ; l'enseignant peut ensuite modifier le
+// libellé (champ text : écrase la traduction, affiché tel quel),
+// ajouter des items, en supprimer ou réinitialiser le tout.
+// ============================================================
+model SaiItem {
+  id        String  @id @default(cuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  // Sous-échelle : 'accountability' | 'preference' | 'satisfaction'
+  subscale  String
+  // Clé i18n de l'énoncé standard (null = item ajouté par l'enseignant).
+  // Les items standards restent ainsi multilingues tant que l'enseignant
+  // ne personnalise pas leur libellé.
+  textKey   String?
+  // Énoncé personnalisé (null = afficher l'énoncé standard via textKey).
+  // Renseigné par l'enseignant : affiché tel quel, dans toutes les langues.
+  text      String?
+  // Item inversé (formulation négative, ex. « est une perte de temps ») :
+  // le calcul des moyennes de sous-échelles inverse la valeur (6 − v).
+  reversed  Boolean @default(false)
+  order     Int     @default(0)
+  createdAt DateTime @default(now())
+
+  responses SaiResponse[]
+
+  @@index([sessionId])
+}
+
+model SaiResponse {
+  id        String  @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      SaiItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  value     Int // 1 à 5 (Likert)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Une seule réponse par (étudiant, item) — le double envoi simultané
+  // est impossible, et un étudiant ne peut pas modifier après validation.
+  @@unique([studentId, itemId])
+
+  @@index([studentId])
 }

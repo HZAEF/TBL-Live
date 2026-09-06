@@ -34,7 +34,7 @@ export async function GET(
       )
     }
 
-    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents] =
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
@@ -52,7 +52,8 @@ export async function GET(
           orderBy: { createdAt: 'asc' },
           // recoveryCode : visible par l'enseignant uniquement — permet de
           // redonner son code à un étudiant qui l'a perdu (porte de secours).
-          select: { id: true, name: true, teamId: true, recoveryCode: true },
+          // saiCompletedAt : v2.6.0, statistiques du questionnaire TBL-SAI.
+          select: { id: true, name: true, teamId: true, recoveryCode: true, saiCompletedAt: true },
         }),
         db.answer.findMany({
           where: { question: { sessionId: session.id }, kind: 'irat' },
@@ -107,11 +108,37 @@ export async function GET(
             student: { select: { name: true } },
           },
         }),
+        // v2.6.0 : questionnaire de fin de séance (TBL-SAI) — items de la
+        // séance, réponses agrégées par item et commentaires libres.
+        db.saiItem.findMany({
+          where: { sessionId: session.id },
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
+          select: { id: true, subscale: true, textKey: true, text: true, reversed: true },
+        }),
+        db.saiResponse.findMany({
+          where: { student: { sessionId: session.id } },
+          select: { itemId: true, value: true },
+        }),
+        db.student.findMany({
+          where: { sessionId: session.id, saiComment: { not: null } },
+          orderBy: [{ saiCompletedAt: 'asc' }],
+          select: { name: true, saiComment: true, saiCompletedAt: true },
+        }),
       ])
 
     // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
     // la numérotation affichée correspond ainsi à l'ordre réel du déroulé TBL.
     const phaseRank = (p: string) => (p === 'application' ? 1 : 0)
+
+    // v2.6.0 — Agrégats du questionnaire TBL-SAI (moyenne brute par item,
+    // nombre d'étudiants ayant répondu, commentaires dans l'ordre).
+    const saiByItem = new Map<string, { sum: number; n: number }>()
+    for (const r of saiResponses) {
+      const cur = saiByItem.get(r.itemId) ?? { sum: 0, n: 0 }
+      cur.sum += r.value
+      cur.n += 1
+      saiByItem.set(r.itemId, cur)
+    }
     questions.sort((a, b) => phaseRank(a.phase) - phaseRank(b.phase) || a.order - b.order)
 
     return NextResponse.json({
@@ -168,6 +195,32 @@ export async function GET(
         phase: a.phase,
         createdAt: a.createdAt,
       })),
+      // v2.6.0 — questionnaire TBL-SAI : items + agrégats par item +
+      // commentaires. Les moyennes de sous-échelles sont calculées côté
+      // client (inversion des items négatifs, libellés i18n).
+      saiItems: saiItems.map((it) => ({
+        id: it.id,
+        subscale: it.subscale as 'accountability' | 'preference' | 'satisfaction',
+        textKey: it.textKey,
+        text: it.text,
+        reversed: it.reversed,
+      })),
+      saiStats: {
+        completed: students.filter((s) => s.saiCompletedAt !== null).length,
+        items: saiItems.map((it) => {
+          const agg = saiByItem.get(it.id)
+          return {
+            id: it.id,
+            mean: agg && agg.n > 0 ? agg.sum / agg.n : 0,
+            n: agg?.n ?? 0,
+          }
+        }),
+        comments: saiComments.map((s) => ({
+          studentName: s.name,
+          comment: s.saiComment as string,
+          createdAt: (s.saiCompletedAt ?? new Date()).toISOString(),
+        })),
+      },
     })
   } catch (e) {
     console.error('GET /api/sessions/[code]/dashboard', e)

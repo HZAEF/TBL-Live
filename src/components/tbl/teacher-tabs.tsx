@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { t, useI18n, formatDate } from '@/lib/i18n'
 import type { DashboardDTO } from '@/lib/tbl-types'
 import { gradeForStudent, fmtNote } from '@/lib/grades'
+import { SAI_SUBSCALES, SAI_SUBSCALE_INFO, saiItemText } from '@/lib/sai'
 import { choiceLetter } from './shared'
 import { QuestionEditor, emptyQuestion } from './question-editor'
 import type { DraftQuestion } from '@/lib/tbl-types'
@@ -111,7 +112,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
                         <span
                           className="ml-2 font-mono text-[11px] font-normal text-stone-400"
                           title={t(
-                            'Code de reprise personnel de l’étudiant (à lui redonner s’il l’a perdu)'
+                            'Code personnel de l’étudiant (à lui redonner s’il l’a perdu)'
                           )}
                         >
                           {m.recoveryCode}
@@ -1198,6 +1199,418 @@ function AlertCountCell({ cell }: { cell: AlertCell }) {
         </p>
       )}
     </td>
+  )
+}
+
+// ================= v2.6.0 : Onglet QUESTIONNAIRE (TBL-SAI) =================
+
+/** Moyenne d'une sous-échelle (1 à 5) à partir des moyennes brutes par
+ *  item : les items inversés (formulation négative) voient leur moyenne
+ *  retournée (6 − moyenne), conformément à la cotation de l'instrument. */
+function saiSubscaleMeanFromItemMeans(
+  entries: { mean: number; n: number; reversed: boolean }[]
+): number | null {
+  const usable = entries.filter((e) => e.n > 0 && Number.isFinite(e.mean))
+  if (usable.length === 0) return null
+  const adjusted = usable.map((e) => (e.reversed ? 6 - e.mean : e.mean))
+  return adjusted.reduce((s, v) => s + v, 0) / adjusted.length
+}
+
+export function QuestionnaireTab({
+  data,
+  manage,
+}: {
+  data: DashboardDTO
+  manage: ManageFn
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const stats = data.saiStats ?? { completed: 0, items: [], comments: [] }
+  const hasResponses = stats.items.some((it) => it.n > 0)
+  const itemStats = new Map(stats.items.map((s) => [s.id, s]))
+
+  const [newSubscale, setNewSubscale] = useState('satisfaction')
+  const [newText, setNewText] = useState('')
+  const [newReversed, setNewReversed] = useState(false)
+
+  return (
+    <div className="space-y-4">
+      {/* Présentation */}
+      <div className="rounded-2xl border border-stone-200 bg-white p-4">
+        <p className="text-sm font-bold text-stone-900">
+          {t('Questionnaire de fin de séance (TBL-SAI)')}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-stone-600">
+          {t(
+            'À la fin de la séance, les étudiants répondent à ce questionnaire pour accéder à leur note et à leur rang. Par défaut, les 33 items standard de l’instrument (Mennenga, 2010) sont proposés, traduits dans toutes les langues de l’application.'
+          )}
+        </p>
+        <p className="mt-2 rounded-xl bg-stone-50 px-3 py-2 text-xs leading-relaxed text-stone-500">
+          {t(
+            'Personnaliser le libellé d’un item remplace sa traduction par votre texte, affiché tel quel dans toutes les langues. Les items « inversés » (formulation négative) sont automatiquement pris en compte dans les moyennes de sous-échelles.'
+          )}
+        </p>
+      </div>
+
+      {/* Garde-fou : réponses déjà collectées */}
+      {hasResponses && (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {t(
+            'Des étudiants ont déjà répondu : la suppression d’items et la réinitialisation sont bloquées, mais les libellés restent modifiables.'
+          )}
+        </p>
+      )}
+
+      {/* Réinitialisation (bloquée par le serveur si des réponses existent) */}
+      <Button
+        variant="outline"
+        className="h-10 w-full border-stone-300 text-stone-600"
+        onClick={() => {
+          if (
+            window.confirm(
+              t(
+                'Réinitialiser le questionnaire standard ? Toutes vos modifications seront perdues (l’opération est impossible si des étudiants ont déjà répondu).'
+              )
+            )
+          ) {
+            manage('sai_reset')
+          }
+        }}
+      >
+        {t('Réinitialiser le questionnaire standard')}
+      </Button>
+
+      {/* Items par sous-échelle */}
+      {SAI_SUBSCALES.map((sub) => {
+        const items = data.saiItems.filter((it) => it.subscale === sub)
+        const info = SAI_SUBSCALE_INFO[sub]
+        return (
+          <section key={sub} className="space-y-2">
+            <div className="rounded-xl bg-stone-100 px-4 py-3">
+              <p className="text-sm font-bold text-stone-800">{t(info.labelKey)}</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+                {t(info.descriptionKey)}
+              </p>
+            </div>
+            {items.length === 0 && (
+              <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50/50 p-4 text-center text-sm text-stone-500">
+                {t('Aucun item dans cette sous-échelle.')}
+              </p>
+            )}
+            <div className="space-y-2">
+              {items.map((it, i) => (
+                <SaiItemEditor
+                  key={it.id}
+                  index={i}
+                  item={it}
+                  deletable={!hasResponses}
+                  manage={manage}
+                />
+              ))}
+            </div>
+          </section>
+        )
+      })}
+
+      {/* Ajout d'un item personnalisé */}
+      <div className="space-y-2 rounded-2xl border-2 border-dashed border-emerald-300 bg-emerald-50/40 p-3">
+        <p className="text-sm font-bold text-stone-800">{t('Ajouter un item')}</p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div>
+            <Label className="text-xs">{t('Sous-échelle de l’item')}</Label>
+            <Select value={newSubscale} onValueChange={setNewSubscale}>
+              <SelectTrigger className="mt-1 h-9 bg-white text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SAI_SUBSCALES.map((sub) => (
+                  <SelectItem key={sub} value={sub}>
+                    {t(SAI_SUBSCALE_INFO[sub].labelKey)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="sm:col-span-2 flex items-end">
+            <label className="flex items-center gap-2 pb-2 text-xs text-stone-600">
+              <input
+                type="checkbox"
+                checked={newReversed}
+                onChange={(e) => setNewReversed(e.target.checked)}
+                className="h-4 w-4 accent-emerald-600"
+              />
+              {t('Item inversé (formulation négative)')}
+            </label>
+          </div>
+        </div>
+        <Textarea
+          value={newText}
+          onChange={(e) => setNewText(e.target.value)}
+          placeholder={t('Libellé de l’item')}
+          rows={2}
+          maxLength={500}
+          className="resize-none bg-white text-sm"
+        />
+        <Button
+          className="h-10 w-full bg-emerald-600 hover:bg-emerald-700"
+          disabled={newText.trim().length < 3}
+          onClick={async () => {
+            const ok = await manage('sai_add_item', {
+              subscale: newSubscale,
+              text: newText.trim(),
+              reversed: newReversed,
+            })
+            if (ok) {
+              toast({ title: t('Nouvel item ajouté en fin de liste.') })
+              setNewText('')
+              setNewReversed(false)
+            }
+          }}
+        >
+          <Plus className="mr-1 h-4 w-4" />
+          {t('Ajouter un item')}
+        </Button>
+      </div>
+
+      {/* ---- Résultats ---- */}
+      <div className="space-y-4 rounded-2xl border border-stone-200 bg-white p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm font-bold text-stone-900">{t('Résultats du questionnaire')}</p>
+          <p className="text-xs text-stone-500">
+            {t('{n} étudiant(s) ont répondu sur {total} inscrit(s)', {
+              n: stats.completed,
+              total: data.students.length,
+            })}
+          </p>
+        </div>
+
+        {stats.completed === 0 ? (
+          <p className="rounded-xl bg-stone-50 px-3 py-2 text-sm text-stone-500">
+            {t('Aucune réponse pour le moment.')}
+          </p>
+        ) : (
+          <>
+            {/* Moyennes de sous-échelles (items inversés pris en compte) */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {SAI_SUBSCALES.map((sub) => {
+                const entries = data.saiItems
+                  .filter((it) => it.subscale === sub)
+                  .map((it) => ({
+                    mean: itemStats.get(it.id)?.mean ?? 0,
+                    n: itemStats.get(it.id)?.n ?? 0,
+                    reversed: it.reversed,
+                  }))
+                const mean = saiSubscaleMeanFromItemMeans(entries)
+                return (
+                  <div
+                    key={sub}
+                    className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-center"
+                  >
+                    <p className="text-[11px] font-semibold leading-tight text-stone-500">
+                      {t(SAI_SUBSCALE_INFO[sub].labelKey)}
+                    </p>
+                    <p className="mt-1 text-2xl font-bold text-stone-800">
+                      {mean === null ? '—' : fmtNote(mean)}
+                      <span className="text-xs font-normal text-stone-400"> / 5</span>
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+            <p className="text-center text-[11px] text-stone-400">
+              {t('Moyenne (1 à 5) — items inversés pris en compte')}
+            </p>
+
+            {/* Détail par item */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-stone-500">
+                {t('Réponses aux items')}
+              </p>
+              <div className="max-h-72 overflow-y-auto rounded-xl border border-stone-200">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {data.saiItems.map((it, i) => {
+                      const st = itemStats.get(it.id)
+                      return (
+                        <tr key={it.id} className={i % 2 === 0 ? 'bg-white' : 'bg-stone-50'}>
+                          <td className="px-3 py-2 leading-snug text-stone-700">
+                            <span className="mr-1 font-mono text-stone-400">{i + 1}.</span>
+                            {saiItemText(it)}
+                            {it.reversed && (
+                              <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-700">
+                                {t('Item inversé (formulation négative)')}
+                              </span>
+                            )}
+                          </td>
+                          <td className="w-28 px-3 py-2 text-right">
+                            <span className="font-bold text-stone-800">
+                              {st && st.n > 0 ? fmtNote(st.mean) : '—'}
+                            </span>
+                            <span className="ml-1 text-stone-400">/ 5</span>
+                          </td>
+                          <td className="w-14 px-3 py-2 text-right text-stone-400">
+                            n={st?.n ?? 0}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-right text-[11px] text-stone-400">{t('Moyenne de l’item')}</p>
+            </div>
+
+            {/* Commentaires */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-stone-500">
+                {t('Commentaires des étudiants')}
+              </p>
+              {stats.comments.length === 0 ? (
+                <p className="rounded-xl bg-stone-50 px-3 py-2 text-sm text-stone-500">
+                  {t('Aucun commentaire pour le moment.')}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {stats.comments.map((c, i) => (
+                    <div key={i} className="rounded-xl bg-stone-50 px-3 py-2">
+                      <p className="text-xs font-semibold text-stone-600">{c.studentName}</p>
+                      <p className="mt-0.5 text-sm leading-relaxed text-stone-700">{c.comment}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SaiItemEditor({
+  index,
+  item,
+  deletable,
+  manage,
+}: {
+  index: number
+  item: DashboardDTO['saiItems'][number]
+  deletable: boolean
+  manage: ManageFn
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState(item.text ?? (item.textKey ? t(item.textKey) : ''))
+  const [reversed, setReversed] = useState(item.reversed)
+  const [saving, setSaving] = useState(false)
+  const dirty = (item.text ?? null) !== (text.trim() || null) || reversed !== item.reversed
+
+  const save = async (customText: string | null) => {
+    if (saving) return
+    if (customText !== null && customText.trim().length < 3) {
+      toast({ title: t('Le libellé de l’item doit contenir au moins 3 caractères.') })
+      return
+    }
+    setSaving(true)
+    const ok = await manage('sai_update_item', {
+      id: item.id,
+      text: customText,
+      reversed,
+    })
+    setSaving(false)
+    if (ok) setOpen(false)
+  }
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 text-sm leading-snug text-stone-700">
+          <span className="mr-1 font-mono text-xs text-stone-400">{index + 1}.</span>
+          {saiItemText(item)}
+        </p>
+        <div className="flex shrink-0 items-center gap-1">
+          {item.reversed && (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+              {t('Item inversé (formulation négative)')}
+            </span>
+          )}
+          {item.text && (
+            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+              {t('Libellé personnalisé')}
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-stone-500"
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? <X className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
+          </Button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="mt-2 space-y-2 border-t border-stone-100 pt-2">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={2}
+            maxLength={500}
+            className="resize-none text-sm"
+            placeholder={t('Libellé de l’item')}
+          />
+          <label className="flex items-center gap-2 text-xs text-stone-600">
+            <input
+              type="checkbox"
+              checked={reversed}
+              onChange={(e) => setReversed(e.target.checked)}
+              className="h-4 w-4 accent-emerald-600"
+            />
+            {t('Item inversé (formulation négative)')}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              className="h-9 bg-emerald-600 hover:bg-emerald-700"
+              disabled={saving || !dirty}
+              onClick={() => save(text.trim() || null)}
+            >
+              <Save className="mr-1 h-3.5 w-3.5" />
+              {t('Sauvegarder')}
+            </Button>
+            {item.textKey && item.text && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 border-stone-300"
+                disabled={saving}
+                onClick={() => save(null)}
+              >
+                {t('Réinitialiser le libellé standard')}
+              </Button>
+            )}
+            {deletable && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 border-red-200 text-red-600 hover:bg-red-50"
+                disabled={saving}
+                onClick={() => {
+                  if (window.confirm(t('Supprimer cet item ?'))) {
+                    manage('sai_delete_item', { id: item.id })
+                  }
+                }}
+              >
+                <Trash2 className="mr-1 h-3.5 w-3.5" />
+                {t('Supprimer cet item')}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

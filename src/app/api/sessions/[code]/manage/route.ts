@@ -13,6 +13,7 @@ import {
 } from '@/lib/tbl'
 import { hashPin } from '@/lib/pin'
 import { isTrashExpired } from '@/lib/session-lifecycle'
+import { SAI_SUBSCALES, DEFAULT_SAI_ITEMS } from '@/lib/sai'
 // Renumérote les questions « libres » d'une phase (rat ou application,
 // sans cas associé) : 0, 1, 2, … Garantit un ordre stable et sans doublons
 // après une suppression ou un changement de phase.
@@ -468,6 +469,131 @@ export async function POST(
 
       // ----- Cycle de vie : corbeille, restauration, suppression, copie -----
 
+      // ----- v2.6.0 : questionnaire de fin de séance (TBL-SAI) -----
+      // Édition des items par l'enseignant. GARDE-FOUS : la suppression
+      // d'un item (et la réinitialisation complète) est refusée dès que
+      // des réponses existent — les réponses étant liées par cascade,
+      // les effacer reviendrait à fausser les résultats déjà collectés.
+      // La modification du libellé reste toujours possible (elle ne
+      // touche ni les réponses ni les moyennes).
+
+      case 'sai_update_item': {
+        const id = typeof body.id === 'string' ? body.id : ''
+        const rawText = typeof body.text === 'string' ? body.text.trim() : ''
+        const restoreDefault = body.text === null
+        const reversed = body.reversed === true
+        const item = await db.saiItem.findFirst({
+          where: { id, sessionId: session.id },
+          include: { _count: { select: { responses: true } } },
+        })
+        if (!item) {
+          return NextResponse.json({ error: 'Item introuvable.' }, { status: 404 })
+        }
+        // null = restaurer le libellé standard (multilingue i18n) ;
+        // sinon le texte personnalisé remplace la traduction partout.
+        let text: string | null
+        if (restoreDefault) {
+          text = null
+        } else {
+          if (rawText.length < 3 || rawText.length > 500) {
+            return NextResponse.json(
+              { error: 'Le libellé de l\u2019item doit contenir au moins 3 caractères.' },
+              { status: 400 }
+            )
+          }
+          text = rawText
+        }
+        await db.saiItem.update({
+          where: { id: item.id },
+          data: { text, reversed },
+        })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'sai_add_item': {
+        const subscale = typeof body.subscale === 'string' ? body.subscale : ''
+        const text = typeof body.text === 'string' ? body.text.trim() : ''
+        const reversed = body.reversed === true
+        if (!SAI_SUBSCALES.includes(subscale as (typeof SAI_SUBSCALES)[number])) {
+          return NextResponse.json({ error: 'Sous-échelle inconnue.' }, { status: 400 })
+        }
+        if (text.length < 3 || text.length > 500) {
+          return NextResponse.json(
+            { error: 'Le libellé de l\u2019item doit contenir au moins 3 caractères.' },
+            { status: 400 }
+          )
+        }
+        const last = await db.saiItem.findFirst({
+          where: { sessionId: session.id },
+          orderBy: { order: 'desc' },
+          select: { order: true },
+        })
+        await db.saiItem.create({
+          data: {
+            sessionId: session.id,
+            subscale,
+            textKey: null, // item de l'enseignant : affiché tel quel
+            text,
+            reversed,
+            order: (last?.order ?? -1) + 1,
+          },
+        })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'sai_delete_item': {
+        const id = typeof body.id === 'string' ? body.id : ''
+        const item = await db.saiItem.findFirst({
+          where: { id, sessionId: session.id },
+          include: { _count: { select: { responses: true } } },
+        })
+        if (!item) {
+          return NextResponse.json({ error: 'Item introuvable.' }, { status: 404 })
+        }
+        if (item._count.responses > 0) {
+          return NextResponse.json(
+            {
+              error:
+                'Cet item a reçu des réponses : il ne peut plus être supprimé (son libellé reste modifiable).',
+            },
+            { status: 409 }
+          )
+        }
+        await db.saiItem.delete({ where: { id: item.id } })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'sai_reset': {
+        // Réinitialisation complète aux 33 items standard. Refusée dès
+        // qu'UNE réponse existe (les items personnalisés et leurs réponses
+        // seraient supprimés en cascade par la réinitialisation).
+        const anyResponse = await db.saiResponse.findFirst({
+          where: { student: { sessionId: session.id } },
+          select: { id: true },
+        })
+        if (anyResponse) {
+          return NextResponse.json(
+            {
+              error:
+                'Des étudiants ont déjà répondu au questionnaire : la réinitialisation est bloquée (les réponses associées seraient perdues).',
+            },
+            { status: 409 }
+          )
+        }
+        await db.saiItem.deleteMany({ where: { sessionId: session.id } })
+        await db.saiItem.createMany({
+          data: DEFAULT_SAI_ITEMS.map((it, i) => ({
+            sessionId: session.id,
+            subscale: it.subscale,
+            textKey: it.key,
+            text: null,
+            reversed: it.reversed,
+            order: i,
+          })),
+        })
+        return NextResponse.json({ ok: true })
+      }
+
       case 'delete_session': {
         // Mise à la corbeille (suppression douce) : les étudiants perdent
         // immédiatement l'accès ; l'enseignant peut restaurer pendant 48 h.
@@ -513,7 +639,7 @@ export async function POST(
         // La copie repart de la phase d'accueil (lobby) avec un nouveau
         // code et un nouveau PIN.
         const pin = isValidPin(body.pin) ? normalizePin(body.pin) : randomCode(6)
-        const [teams, freeQuestions, cases] = await Promise.all([
+        const [teams, freeQuestions, cases, saiItems] = await Promise.all([
           db.team.findMany({
             where: { sessionId: session.id },
             orderBy: { number: 'asc' },
@@ -523,6 +649,13 @@ export async function POST(
             orderBy: [{ phase: 'asc' }, { order: 'asc' }, { id: 'asc' }],
           }),
           db.case.findMany({
+            where: { sessionId: session.id },
+            orderBy: [{ order: 'asc' }, { id: 'asc' }],
+          }),
+          // v2.6.0 : le questionnaire TBL-SAI fait partie de la copie
+          // pédagogique (items, libellés personnalisés, ordre) — jamais
+          // les réponses des étudiants.
+          db.saiItem.findMany({
             where: { sessionId: session.id },
             orderBy: [{ order: 'asc' }, { id: 'asc' }],
           }),
@@ -590,6 +723,19 @@ export async function POST(
             },
           })
         }
+        // v2.6.0 : copie du questionnaire TBL-SAI (items uniquement).
+        if (saiItems.length > 0) {
+          await db.saiItem.createMany({
+            data: saiItems.map((it) => ({
+              sessionId: copy.id,
+              subscale: it.subscale,
+              textKey: it.textKey,
+              text: it.text,
+              reversed: it.reversed,
+              order: it.order,
+            })),
+          })
+        }
         return NextResponse.json({
           ok: true,
           code: copy.code,
@@ -605,7 +751,7 @@ export async function POST(
         // leurs codes de reprise), réponses, réclamations, évaluations.
         // À télécharger avant chaque mise à jour de l'application.
         // Les secrets (PIN haché, jetons enseignant/étudiants) sont exclus.
-        const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals] =
+        const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals, saiItems, saiResponses] =
           await Promise.all([
             db.team.findMany({
               where: { sessionId: session.id },
@@ -614,7 +760,15 @@ export async function POST(
             db.student.findMany({
               where: { sessionId: session.id },
               orderBy: { createdAt: 'asc' },
-              select: { id: true, name: true, teamId: true, recoveryCode: true, createdAt: true },
+              select: {
+                id: true,
+                name: true,
+                teamId: true,
+                recoveryCode: true,
+                saiCompletedAt: true,
+                saiComment: true,
+                createdAt: true,
+              },
             }),
             db.question.findMany({
               where: { sessionId: session.id },
@@ -639,6 +793,15 @@ export async function POST(
               where: { sessionId: session.id },
               orderBy: { createdAt: 'asc' },
             }),
+            // v2.6.0 : questionnaire TBL-SAI (items + réponses + complétion)
+            db.saiItem.findMany({
+              where: { sessionId: session.id },
+              orderBy: [{ order: 'asc' }, { id: 'asc' }],
+            }),
+            db.saiResponse.findMany({
+              where: { student: { sessionId: session.id } },
+              orderBy: { createdAt: 'asc' },
+            }),
           ])
         return NextResponse.json({
           format: 'tbl-live-sauvegarde',
@@ -661,6 +824,9 @@ export async function POST(
           appeals,
           appAnswers,
           peerEvals,
+          // v2.6.0 : questionnaire TBL-SAI — items et réponses
+          saiItems,
+          saiResponses,
         })
       }
 

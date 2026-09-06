@@ -1,7 +1,16 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, LogIn, ChevronRight, Trash2, Sparkles, Dices } from 'lucide-react'
+import {
+  Plus,
+  LogIn,
+  ChevronRight,
+  Trash2,
+  Sparkles,
+  Dices,
+  ClipboardList,
+  RotateCcw,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,6 +25,7 @@ import {
 import { exampleContent, emptyQuestion, emptyCase, QuestionEditor } from './question-editor'
 import { TeacherDashboard } from './teacher-dashboard'
 import { suggestPin, type DraftCase, type DraftQuestion } from '@/lib/tbl-types'
+import { DEFAULT_SAI_ITEMS, SAI_SUBSCALES, SAI_SUBSCALE_INFO, type SaiSubscale } from '@/lib/sai'
 import { t, useI18n } from '@/lib/i18n'
 import { useToast } from '@/hooks/use-toast'
 
@@ -194,6 +204,178 @@ function SavedSessionRow({
   )
 }
 
+// ---------------- v2.6.0 : questionnaire de fin de séance (création) ----------------
+
+/** Brouillon d'un item TBL-SAI dans le formulaire de création.
+ *  key = clé i18n de l'item standard (null = ajouté par l'enseignant) ;
+ *  custom = true dès que l'enseignant modifie le libellé (le texte
+ *  personnalisé remplace alors la traduction, affiché tel quel). */
+interface DraftSaiItem {
+  key: string | null
+  subscale: SaiSubscale
+  reversed: boolean
+  text: string
+  custom: boolean
+}
+
+function SaiCustomizationSection({
+  drafts,
+  setDrafts,
+  onRestore,
+}: {
+  drafts: DraftSaiItem[]
+  setDrafts: (next: DraftSaiItem[]) => void
+  onRestore: () => void
+}) {
+  const { t } = useI18n()
+  const [newSubscale, setNewSubscale] = useState<SaiSubscale>('satisfaction')
+  const [newText, setNewText] = useState('')
+  const modified = drafts.some((d) => d.custom || d.key === null) || drafts.length !== DEFAULT_SAI_ITEMS.length
+
+  const update = (i: number, patch: Partial<DraftSaiItem>) => {
+    const next = [...drafts]
+    next[i] = { ...next[i], ...patch }
+    setDrafts(next)
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50/50 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-stone-800">
+            <ClipboardList className="h-4 w-4 text-stone-500" />
+            {t('Personnaliser le questionnaire de fin de séance')}
+            {modified && (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                {t('Questionnaire personnalisé : {n} items', { n: drafts.length })}
+              </span>
+            )}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-stone-500">
+            {t(
+              'Par défaut, le questionnaire standard TBL-SAI (33 items, Mennenga 2010) est proposé aux étudiants, traduit dans toutes les langues de l’application. Cliquez ici si vous souhaitez l’adapter avant de créer la séance.'
+            )}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-9 shrink-0 border-stone-300 text-stone-600"
+          onClick={onRestore}
+        >
+          <RotateCcw className="mr-1 h-3.5 w-3.5" />
+          {t('Restaurer le questionnaire standard')}
+        </Button>
+      </div>
+
+      {SAI_SUBSCALES.map((sub) => {
+        const items = drafts.map((d, i) => ({ d, i })).filter(({ d }) => d.subscale === sub)
+        const info = SAI_SUBSCALE_INFO[sub]
+        return (
+          <section key={sub} className="space-y-2">
+            <div className="rounded-xl bg-white px-3 py-2">
+              <p className="text-xs font-bold text-stone-700">{t(info.labelKey)}</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-stone-400">
+                {t(info.descriptionKey)}
+              </p>
+            </div>
+            {items.length === 0 && (
+              <p className="rounded-xl border border-dashed border-stone-300 bg-white/60 p-2 text-center text-xs text-stone-400">
+                {t('Aucun item dans cette sous-échelle.')}
+              </p>
+            )}
+            {items.map(({ d, i }) => (
+              <div key={i} className="flex items-start gap-2 rounded-xl bg-white p-2">
+                <span className="mt-2 w-6 shrink-0 text-center font-mono text-[11px] text-stone-300">
+                  {i + 1}
+                </span>
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <Textarea
+                    value={d.text}
+                    onChange={(e) => update(i, { text: e.target.value, custom: true })}
+                    rows={2}
+                    maxLength={500}
+                    className="resize-none border-stone-200 text-sm"
+                  />
+                  <label className="flex items-center gap-1.5 text-[11px] text-stone-500">
+                    <input
+                      type="checkbox"
+                      checked={d.reversed}
+                      onChange={(e) => update(i, { reversed: e.target.checked })}
+                      className="h-3.5 w-3.5 accent-emerald-600"
+                    />
+                    {t('Item inversé (formulation négative)')}
+                  </label>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 text-stone-300 hover:bg-red-50 hover:text-red-600"
+                  aria-label={t('Supprimer cet item')}
+                  onClick={() => setDrafts(drafts.filter((_, idx) => idx !== i))}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </section>
+        )
+      })}
+
+      {/* Ajout d'un item libre */}
+      <div className="space-y-1.5 rounded-xl border border-dashed border-emerald-300 bg-white p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={newSubscale}
+            onChange={(e) => setNewSubscale(e.target.value as SaiSubscale)}
+            className="h-8 rounded-lg border border-stone-200 bg-white px-2 text-xs text-stone-700"
+            aria-label={t('Sous-échelle de l’item')}
+          >
+            {SAI_SUBSCALES.map((sub) => (
+              <option key={sub} value={sub}>
+                {t(SAI_SUBSCALE_INFO[sub].labelKey)}
+              </option>
+            ))}
+          </select>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 border-emerald-400 text-emerald-700 hover:bg-emerald-50"
+            disabled={newText.trim().length < 3}
+            onClick={() => {
+              setDrafts([
+                ...drafts,
+                {
+                  key: null,
+                  subscale: newSubscale,
+                  reversed: false,
+                  text: newText.trim(),
+                  custom: true,
+                },
+              ])
+              setNewText('')
+            }}
+          >
+            <Plus className="mr-1 h-3.5 w-3.5" />
+            {t('Ajouter un item')}
+          </Button>
+        </div>
+        <Textarea
+          value={newText}
+          onChange={(e) => setNewText(e.target.value)}
+          rows={2}
+          maxLength={500}
+          placeholder={t('Libellé de l’item')}
+          className="resize-none border-stone-200 text-sm"
+        />
+      </div>
+    </div>
+  )
+}
+
 // ---------------- Création de séance ----------------
 
 function validateDrafts(drafts: DraftQuestion[]): Record<number, string[]> {
@@ -225,12 +407,38 @@ function CreateSessionForm({
   const [questions, setQuestions] = useState<DraftQuestion[]>([emptyQuestion('rat')])
   // Cas cliniques d'application : énoncé + 3 à 5 QCU, affichés un par un
   const [cases, setCases] = useState<DraftCase[]>([])
+  // v2.6.0 : questionnaire de fin de séance (TBL-SAI). Les 33 items
+  // standard (multilingues) sont proposés par défaut ; l'enseignant peut
+  // cliquer sur le bouton en bas de page pour les personnaliser.
+  const [showSai, setShowSai] = useState(false)
+  const [saiDrafts, setSaiDrafts] = useState<DraftSaiItem[]>(() =>
+    DEFAULT_SAI_ITEMS.map((it) => ({
+      key: it.key,
+      subscale: it.subscale,
+      reversed: it.reversed,
+      text: '',
+      custom: false,
+    }))
+  )
+  const { toast } = useToast()
+  const { t } = useI18n()
   const [submitting, setSubmitting] = useState(false)
   const [errors, setErrors] = useState<Record<number, string[]>>({})
   const [caseErrors, setCaseErrors] = useState<Record<string, Record<number, string[]>>>({})
   const [globalError, setGlobalError] = useState('')
-  const { toast } = useToast()
-  const { t } = useI18n()
+
+  const restoreSaiDefaults = () => {
+    setSaiDrafts(
+      DEFAULT_SAI_ITEMS.map((it) => ({
+        key: it.key,
+        subscale: it.subscale,
+        reversed: it.reversed,
+        text: '',
+        custom: false,
+      }))
+    )
+    toast({ title: t('Les 33 items standard sont restaurés.') })
+  }
 
   const submit = async () => {
     const qErrors = validateDrafts(questions)
@@ -266,6 +474,13 @@ function CreateSessionForm({
       )
       return
     }
+    // v2.6.0 : les libellés personnalisés du questionnaire doivent être
+    // remplis (les items standard intacts ne sont pas vérifiés : leur
+    // traduction multilingue est conservée).
+    if (showSai && saiDrafts.some((d) => d.custom && d.text.trim().length < 3)) {
+      setGlobalError(t('Le libellé de l’item doit contenir au moins 3 caractères.'))
+      return
+    }
     setGlobalError('')
     setSubmitting(true)
     try {
@@ -276,6 +491,21 @@ function CreateSessionForm({
           pin,
           teamCount,
           iratMinutes,
+          // v2.6.0 : questionnaire personnalisé — envoyé UNIQUEMENT si
+          // l'enseignant a ouvert la personnalisation (sinon le serveur
+          // sème les 33 items standard multilingues).
+          ...(showSai
+            ? {
+                saiItems: saiDrafts.map((d) => ({
+                  key: d.key ?? undefined,
+                  // Un item standard intact (custom = false) ne porte pas
+                  // de texte : sa traduction multilingue reste utilisée.
+                  text: d.custom ? d.text.trim() : undefined,
+                  subscale: d.subscale,
+                  reversed: d.reversed,
+                })),
+              }
+            : {}),
           questions: questions.map((q) => ({
             text: q.text.trim(),
             choices: q.choices.filter((c) => c.trim()),
@@ -562,6 +792,52 @@ function CreateSessionForm({
           )}
         </p>
       </div>
+
+      {/* v2.6.0 : bouton demandé par l'enseignant — en bas de la page de
+          création, pour personnaliser le questionnaire de fin de séance
+          (TBL-SAI) si l'enseignant le souhaite. */}
+      {showSai ? (
+        <SaiCustomizationSection
+          drafts={saiDrafts.map((d) => ({
+            ...d,
+            // Affichage : libellé personnalisé, sinon l'énoncé standard
+            // dans la langue de l'interface de l'enseignant.
+            text: d.custom ? d.text : d.key ? t(d.key) : '',
+          }))}
+          setDrafts={setSaiDrafts}
+          onRestore={restoreSaiDefaults}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowSai(true)}
+          className="flex w-full items-start gap-3 rounded-2xl border-2 border-dashed border-stone-300 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-stone-100 text-stone-500">
+            <ClipboardList className="h-5 w-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-bold text-stone-800">
+              {t('Personnaliser le questionnaire de fin de séance')}
+            </span>
+            <span className="mt-1 block text-xs leading-relaxed text-stone-500">
+              {t(
+                'Par défaut, le questionnaire standard TBL-SAI (33 items, Mennenga 2010) est proposé aux étudiants, traduit dans toutes les langues de l’application. Cliquez ici si vous souhaitez l’adapter avant de créer la séance.'
+              )}
+            </span>
+          </span>
+        </button>
+      )}
+      {showSai && (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 w-full border-stone-300"
+          onClick={() => setShowSai(false)}
+        >
+          {t('Terminer la personnalisation')}
+        </Button>
+      )}
 
       {globalError && (
         <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

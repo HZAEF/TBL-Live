@@ -47,7 +47,7 @@ import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import { useI18n, formatDate } from '@/lib/i18n'
 import { Countdown, ElapsedSince, InfoCard, PhaseBadge, choiceLetter } from './shared'
-import { TeamsTab, QuestionsTab, ResultsTab, AppealsTab, SignalementsTab, exportCsv } from './teacher-tabs'
+import { TeamsTab, QuestionsTab, ResultsTab, AppealsTab, SignalementsTab, QuestionnaireTab, exportCsv } from './teacher-tabs'
 import { StatsTab } from './stats-tab'
 
 export function TeacherDashboard({
@@ -394,6 +394,12 @@ export function TeacherDashboard({
           <TabsTrigger value="questions" className="flex-1 px-3 py-2 sm:flex-none">
             {t('Questions')}
           </TabsTrigger>
+          {/* v2.6.0 : rubrique « Questionnaire » — édition des items du
+              questionnaire de fin de séance (TBL-SAI) et résultats, à part
+              entière juste après « Questions ». */}
+          <TabsTrigger value="questionnaire" className="flex-1 px-3 py-2 sm:flex-none">
+            {t('Questionnaire')}
+          </TabsTrigger>
           <TabsTrigger value="results" className="flex-1 px-3 py-2 sm:flex-none">
             {t('Résultats')}
           </TabsTrigger>
@@ -434,6 +440,9 @@ export function TeacherDashboard({
         </TabsContent>
         <TabsContent value="questions" className="mt-4">
           <QuestionsTab data={data} manage={manage} />
+        </TabsContent>
+        <TabsContent value="questionnaire" className="mt-4">
+          <QuestionnaireTab data={data} manage={manage} />
         </TabsContent>
         <TabsContent value="results" className="mt-4">
           <ResultsTab data={data} ratQs={ratQs} appQs={appQs} />

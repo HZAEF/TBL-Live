@@ -9,6 +9,7 @@ import {
   sanitizeCaseInput,
 } from '@/lib/tbl'
 import { hashPin } from '@/lib/pin'
+import { SAI_SUBSCALES, DEFAULT_SAI_ITEMS, type SaiSubscale } from '@/lib/sai'
 
 // POST /api/sessions — création d'une séance TBL
 export async function POST(req: NextRequest) {
@@ -87,6 +88,43 @@ export async function POST(req: NextRequest) {
     // haché bcrypt (si la base fuit, les PIN restent illisibles).
     const teacherPinHash = await hashPin(safePin)
 
+    // v2.6.0 — Questionnaire de fin de séance (TBL-SAI) : par défaut les
+    // 33 items standard (clés i18n → multilingue). Le formulaire de
+    // création peut envoyer une version personnalisée : chaque item porte
+    // alors soit sa clé standard (textKey : la traduction multilingue
+    // reste utilisée), soit un libellé libre (text : affiché tel quel).
+    // NB : un tableau VIDE envoyé exprès = questionnaire sans items
+    // (accès direct à la note) ; l'absence totale = 33 items standard.
+    const rawSaiItems = Array.isArray(body.saiItems) ? body.saiItems : null
+    const saiItemData: {
+      subscale: SaiSubscale
+      textKey: string | null
+      text: string | null
+      reversed: boolean
+    }[] = []
+    if (rawSaiItems !== null && rawSaiItems.length <= 60) {
+      for (const raw of rawSaiItems) {
+        const subscale =
+          typeof raw?.subscale === 'string' &&
+          SAI_SUBSCALES.includes(raw.subscale as SaiSubscale)
+            ? (raw.subscale as SaiSubscale)
+            : null
+        const textKey = typeof raw?.key === 'string' && raw.key.trim() ? raw.key.trim() : null
+        const text =
+          typeof raw?.text === 'string' && raw.text.trim().length >= 3
+            ? raw.text.trim().slice(0, 500)
+            : null
+        const reversed = raw?.reversed === true
+        if (!subscale || (!textKey && !text)) continue // entrée invalide : ignorée
+        saiItemData.push({ subscale, textKey, text, reversed })
+      }
+    } else if (rawSaiItems === null) {
+      // Aucune personnalisation : les 33 items standard.
+      for (const it of DEFAULT_SAI_ITEMS) {
+        saiItemData.push({ subscale: it.subscale, textKey: it.key, text: null, reversed: it.reversed })
+      }
+    }
+
     const session = await db.session.create({
       data: {
         code,
@@ -102,6 +140,17 @@ export async function POST(req: NextRequest) {
         },
         questions: {
           create: questionData,
+        },
+        // v2.6.0 : le questionnaire TBL-SAI est semé dès la création —
+        // chaque séance possède sa copie modifiable des items.
+        saiItems: {
+          create: saiItemData.map((it, i) => ({
+            subscale: it.subscale,
+            textKey: it.textKey,
+            text: it.text,
+            reversed: it.reversed,
+            order: i,
+          })),
         },
       },
     })

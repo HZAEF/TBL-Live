@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { parseChoices, extractToken } from '@/lib/tbl'
 import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
+import { computeRankFor } from '@/lib/grades'
+import { computeAllFinalGrades } from '@/lib/final-results'
 
 // GET /api/student — état complet de l'étudiant selon la phase en cours.
 // Jeton transmis par l'en-tête « Authorization: Bearer … » (repli ?token=
@@ -96,8 +98,12 @@ export async function GET(req: NextRequest) {
       caseId: q.caseId,
     })
 
-    // Les bonnes réponses ne sont divulguées qu'après les tests (iRAT + tRAT)
-    const revealCorrect = ['appeal', 'feedback', 'finished'].includes(status)
+    // Les bonnes réponses ne sont divulguées qu'après les tests (iRAT + tRAT).
+    // v2.6.0 : PLUS JAMAIS en fin de séance (statut « finished ») : la page
+    // de fin n'affiche plus les corrections (risque de capture d'écran et
+    // de divulgation hors classe) et la note finale est calculée côté
+    // serveur — le « corrigé » ne transite plus du tout vers l'étudiant.
+    const revealCorrect = ['appeal', 'feedback'].includes(status)
 
     // ----- Révélation automatique par question d'application -----
     // Une question est révélée dès que toutes les équipes actives (au moins
@@ -113,9 +119,10 @@ export async function GET(req: NextRequest) {
     })
 
     // Pour l'application : bonne réponse divulguée question par question,
-    // seulement une fois révélée (ou à la fin de la séance).
+    // seulement une fois révélée pendant la phase d'application — jamais
+    // après la fin de la séance (v2.6.0, cf. revealCorrect ci-dessus).
     const revealAppCorrect = (questionId: string) =>
-      status === 'finished' || revealedAppQuestionIds.includes(questionId)
+      status !== 'finished' && revealedAppQuestionIds.includes(questionId)
 
     const response: Record<string, unknown> = {
       session: {
@@ -130,6 +137,9 @@ export async function GET(req: NextRequest) {
         id: student.id,
         name: student.name,
         recoveryCode: student.recoveryCode,
+        // v2.6.0 : date de soumission du questionnaire TBL-SAI
+        // (null = questionnaire non rempli → note et rang masqués).
+        saiCompletedAt: student.saiCompletedAt ? student.saiCompletedAt.toISOString() : null,
         team: student.team ? { id: student.team.id, name: student.team.name } : null,
       },
       teamMembers,
@@ -140,15 +150,16 @@ export async function GET(req: NextRequest) {
       myIratAnswers: myIratAnswers.map((a) => ({
         questionId: a.questionId,
         choice: a.choice,
-        isCorrect: status === 'irat' ? undefined : a.isCorrect,
-        score: status === 'irat' ? undefined : a.score,
+        // v2.6.0 : plus de divulgation de correction/score en fin de séance
+        isCorrect: status === 'irat' || status === 'finished' ? undefined : a.isCorrect,
+        score: status === 'irat' || status === 'finished' ? undefined : a.score,
       })),
       teamTratAnswers: teamTratAnswers.map((a) => ({
         questionId: a.questionId,
         choice: a.choice,
         attempt: a.attempt,
-        isCorrect: a.isCorrect,
-        score: a.score,
+        isCorrect: status === 'finished' ? undefined : a.isCorrect,
+        score: status === 'finished' ? undefined : a.score,
       })),
       myAppeals: myAppeals.map((a) => ({
         questionId: a.questionId,
@@ -180,8 +191,9 @@ export async function GET(req: NextRequest) {
       }))
     }
 
-    // Statistiques de classe pour la phase de feedback
-    if (status === 'feedback' || status === 'finished') {
+    // Statistiques de classe pour la phase de feedback (v2.6.0 : plus en
+    // fin de séance — la page de fin n'affiche plus de statistiques).
+    if (status === 'feedback') {
       const allIrat = await db.answer.findMany({
         where: { kind: 'irat', question: { sessionId: session.id, phase: 'rat' } },
         select: { questionId: true, isCorrect: true },
@@ -199,8 +211,9 @@ export async function GET(req: NextRequest) {
       }))
     }
 
-    // Réponses de toutes les équipes — uniquement pour les questions révélées
-    if (revealedAppQuestionIds.length > 0) {
+    // Réponses de toutes les équipes — uniquement pour les questions
+    // révélées PENDANT la phase d'application (jamais en fin de séance).
+    if (status !== 'finished' && revealedAppQuestionIds.length > 0) {
       const revealed = new Set(revealedAppQuestionIds)
       response.allTeamAppAnswers = allAppAnswersRaw
         .filter((a) => revealed.has(a.questionId))
@@ -231,6 +244,38 @@ export async function GET(req: NextRequest) {
               count: receivedEvals.length,
             }
           : null
+    }
+
+    // v2.6.0 — Fin de séance : questionnaire TBL-SAI puis note + rang.
+    // Le questionnaire (items de la séance) n'est envoyé qu'AVANT la
+    // soumission ; la note finale et le rang ne sont envoyés qu'APRÈS —
+    // l'étudiant doit répondre pour y accéder (verrou serveur : impossible
+    // de contourner en lisant les données de l'API).
+    if (status === 'finished') {
+      if (!student.saiCompletedAt) {
+        const saiItems = await db.saiItem.findMany({
+          where: { sessionId: session.id },
+          orderBy: [{ order: 'asc' }, { id: 'asc' }],
+          select: { id: true, subscale: true, textKey: true, text: true, reversed: true },
+        })
+        response.saiItems = saiItems.map((it) => ({
+          id: it.id,
+          subscale: it.subscale as 'accountability' | 'preference' | 'satisfaction',
+          textKey: it.textKey,
+          text: it.text,
+          reversed: it.reversed,
+        }))
+      } else {
+        // Questionnaire déjà soumis : note finale (calcul serveur, cf.
+        // final-results.ts) + rang parmi les étudiants notés de la séance.
+        const finals = await computeAllFinalGrades(session.id)
+        const mine = finals.find((f) => f.studentId === student.id)
+        response.finalNote = mine ? mine.grade.final : null
+        response.myRank = computeRankFor(
+          finals.map((f) => ({ studentId: f.studentId, final: f.grade.final })),
+          student.id
+        )
+      }
     }
 
     return NextResponse.json(response)

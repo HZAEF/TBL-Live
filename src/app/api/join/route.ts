@@ -4,14 +4,17 @@ import { getSessionByCode, randomToken, randomRecoveryCode, normalizeName } from
 
 // POST /api/join — l'étudiant rejoint une séance
 //
-// Reprise de séance sécurisée : un nom seul ne suffit plus. Chaque étudiant
-// reçoit, à sa PREMIÈRE connexion, un code de reprise personnel (6 caractères)
-// affiché à l'écran. Pour reprendre sa séance (autre appareil, navigateur
-// vidé), il saisit son nom ET son code de reprise. Conséquences :
+// v2.6.0 : chaque étudiant CHOISIT lui-même son code personnel (4 à 12
+// caractères, chiffres et lettres) au moment de saisir son nom — il est
+// OBLIGATOIRE. Ce code permet de reprendre sa séance (autre appareil,
+// navigateur vidé) : pour récupérer son compte, il saisit son nom ET son
+// code personnel. Conséquences :
 //  - impossible d'usurper le compte d'un camarade en connaissant juste son
 //    prénom ;
 //  - deux homonymes ne « s'éjectent » plus mutuellement : le second est
 //    invité à se différencier (nom de famille) au lieu de voler le compte.
+// Les comptes créés avant la v2.6.0 gardent leur code généré (6 caractères)
+// — parfaitement compatible avec la reprise par nom + code.
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
@@ -74,7 +77,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              'Ce nom est déjà utilisé dans cette séance. S\u2019il s\u2019agit de vous, saisissez votre code de reprise (affiché lors de votre première connexion, visible aussi auprès de votre professeur). Sinon, précisez votre nom (ex. prénom + nom de famille) pour créer votre propre compte.',
+              'Ce nom est déjà utilisé dans cette séance. S\u2019il s\u2019agit de vous, saisissez votre code personnel (choisi lors de votre première connexion, visible aussi auprès de votre professeur). Sinon, précisez votre nom (ex. prénom + nom de famille) pour créer votre propre compte.',
           },
           { status: 409 }
         )
@@ -103,6 +106,18 @@ export async function POST(req: NextRequest) {
       })
       if (!match.recoveryCode) isNew = true // montre le nouveau code à l'écran
     } else {
+      // v2.6.0 : premier compte pour ce nom — le code personnel choisi par
+      // l'étudiant est OBLIGATOIRE (4 à 12 caractères, chiffres et lettres).
+      // Un compte existant ne passe jamais ici (branche « matches »).
+      if (!/^[A-Z0-9]{4,12}$/.test(recoveryCode)) {
+        return NextResponse.json(
+          {
+            error:
+              'Le code personnel doit contenir entre 4 et 12 caractères (chiffres et lettres, sans accents ni symboles).',
+          },
+          { status: 400 }
+        )
+      }
       // Vérifie que l'équipe demandée appartient bien à la séance
       let targetTeamId = teamId
       if (targetTeamId) {
@@ -141,7 +156,8 @@ export async function POST(req: NextRequest) {
           sessionId: session.id,
           name,
           token: randomToken(),
-          recoveryCode: randomRecoveryCode(),
+          // v2.6.0 : code CHOISI par l'étudiant (validé ci-dessus)
+          recoveryCode,
           teamId: targetTeamId,
         },
       })

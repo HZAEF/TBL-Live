@@ -129,6 +129,36 @@ export function gradeForStudent(
   })
 }
 
+// ---------- v2.6.0 : rang de l'étudiant dans la séance ----------
+//
+// Classement « sportif » (1, 2, 2, 4…) : les ex æquo partagent le même
+// rang, le suivant saute les places. Seuls les étudiants ayant une note
+// finale calculable (au moins une composante disponible) sont classés.
+
+export interface RankInput {
+  studentId: string
+  final: number | null
+}
+
+export interface StudentRank {
+  /** 1 = meilleure note. Ex æquo → même rang. */
+  rank: number
+  /** Nombre total d'étudiants classés (note calculable) */
+  total: number
+}
+
+/**
+ * Rang d'un étudiant parmi les notes finales de la séance.
+ * Renvoie null si l'étudiant est introuvable ou sans note calculable.
+ */
+export function computeRankFor(finals: RankInput[], studentId: string): StudentRank | null {
+  const graded = finals.filter((f) => f.final !== null && Number.isFinite(f.final))
+  const mine = finals.find((f) => f.studentId === studentId)
+  if (!mine || mine.final === null || !Number.isFinite(mine.final)) return null
+  const rank = 1 + graded.filter((f) => (f.final as number) > (mine.final as number)).length
+  return { rank, total: graded.length }
+}
+
 // ---------- Côté étudiant : à partir de son état personnel ----------
 
 export function gradeForStudentSelf(data: StudentStateDTO): FinalGrade {
