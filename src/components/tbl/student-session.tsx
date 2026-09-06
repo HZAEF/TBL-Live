@@ -30,8 +30,14 @@ export function StudentSession({
   onExit: () => void
 }) {
   const { data, error, loading, refresh } = usePoll<StudentStateDTO>(
-    () => api<StudentStateDTO>(`/api/student?token=${encodeURIComponent(token)}`),
-    2500
+    // v2.4.0 : jeton dans l'en-tête Authorization (hors des journaux serveur).
+    () => api<StudentStateDTO>('/api/student', { headers: { Authorization: `Bearer ${token}` } }),
+    // Sondage adaptatif : 2,5 s pendant les phases où les étudiants
+    // répondent (iRAT, tRAT, application), 5 s pendant les phases d'attente
+    // (accueil, réclamations, feedback, pairs, fin) — divise environ par
+    // deux la charge sur la base Neon pour une grande classe, sans perte
+    // de réactivité là où elle compte.
+    (d) => (d && ['irat', 'trat', 'application'].includes(d.session.status) ? 2500 : 5000)
   )
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [showCode, setShowCode] = useState(false)

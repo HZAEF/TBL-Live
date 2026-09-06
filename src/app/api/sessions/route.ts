@@ -8,6 +8,7 @@ import {
   sanitizeQuestionInput,
   sanitizeCaseInput,
 } from '@/lib/tbl'
+import { hashPin } from '@/lib/pin'
 
 // POST /api/sessions — création d'une séance TBL
 export async function POST(req: NextRequest) {
@@ -82,11 +83,15 @@ export async function POST(req: NextRequest) {
     const code = await generateUniqueCode()
     const teacherToken = randomToken()
 
+    // v2.4.0 : le PIN n'est JAMAIS stocké en clair — uniquement son
+    // haché bcrypt (si la base fuit, les PIN restent illisibles).
+    const teacherPinHash = await hashPin(safePin)
+
     const session = await db.session.create({
       data: {
         code,
         title,
-        teacherPin: safePin,
+        teacherPin: teacherPinHash,
         teacherToken,
         iratMinutes,
         teams: {

@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
-import { randomBytes } from 'crypto'
+import { randomBytes, timingSafeEqual } from 'crypto'
+import type { NextRequest } from 'next/server'
 
 // Alphabet sans caractères ambigus (pas de O/0, I/1)
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -27,6 +28,34 @@ export function randomCode(len = 6): string {
 }
 export function randomToken(): string {
   return randomBytes(24).toString('hex')
+}
+
+// ---- Comparaison en temps constant (v2.4.0) ----
+// Une comparaison « === » classique s'arrête au premier caractère différent :
+// le temps de réponse peut théoriquement laisser fuir la longueur du préfixe
+// commun (attaque temporelle). crypto.timingSafeEqual compare en temps fixe.
+// Le risque était faible ici (verrouillage PIN + jetons à forte entropie),
+// mais c'est la bonne pratique et elle est gratuite.
+export function safeEqualStrings(a: string, b: string): boolean {
+  const ba = Buffer.from(a, 'utf8')
+  const bb = Buffer.from(b, 'utf8')
+  if (ba.length !== bb.length) return false
+  return timingSafeEqual(ba, bb)
+}
+
+// ---- Extraction du jeton (v2.4.0) ----
+// Priorité à l'en-tête « Authorization: Bearer … » : le jeton n'apparaît
+// alors ni dans les journaux du serveur, ni ceux du proxy/CDN. Le paramètre
+// d'URL ?token= reste accepté en repli pour les onglets encore ouverts sur
+// une version précédente de l'application au moment d'une mise à jour
+// (pendant une séance en direct, personne ne recharge sa page).
+export function extractToken(req: NextRequest): string {
+  const auth = req.headers.get('authorization')
+  if (auth) {
+    const m = auth.match(/^Bearer\s+(.+)$/i)
+    if (m) return m[1].trim()
+  }
+  return req.nextUrl.searchParams.get('token') || ''
 }
 
 export function normalizeCode(code: string): string {

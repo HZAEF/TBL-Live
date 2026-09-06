@@ -646,4 +646,8 @@ export const ar: Record<string, string> = {
   "Vous pourrez aussi le revoir dans la séance (bouton « code » en haut de l’écran) ou le demander à votre professeur.": "ستتمكن أيضًا من مراجعته في الجلسة (زر « الرمز » أعلى الشاشة) أو من طلبه من أستاذك.",
   "TBL Live — Application libre d’apprentissage en équipe, pour l’enseignement.": "TBL Live — تطبيق مجاني للتعلم القائم على الفريق لأغراض التعليم.",
   "iRAT · tRAT · Réclamations · Application · Évaluation par les pairs": "iRAT · tRAT · الاعتراضات · التطبيق · تقييم الأقران",
+  "Double envoi détecté : votre équipe a déjà répondu à cette question.": "تم رصد إرسال مكرر: فريقك أجاب عن هذا السؤال بالفعل.",
+  "Fichier de sauvegarde téléchargé.": "تم تنزيل ملف النسخة الاحتياطية.",
+  "Sauvegarder": "نسخ احتياطي",
+  "Télécharger une copie complète de la séance (fichier JSON)": "تنزيل نسخة كاملة من الجلسة (ملف JSON)",
 }

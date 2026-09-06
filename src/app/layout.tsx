@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { ServiceWorkerRegister } from "@/components/service-worker-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -64,6 +65,9 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
+        {/* v2.4.0 : installe le service worker minimal → application
+            réellement installable sur Android/Chrome (aucun cache). */}
+        <ServiceWorkerRegister />
       </body>
     </html>
   );

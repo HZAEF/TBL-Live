@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { parseChoices } from '@/lib/tbl'
+import { parseChoices, extractToken } from '@/lib/tbl'
 import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
 
-// GET /api/student?token= — état complet de l'étudiant selon la phase en cours
+// GET /api/student — état complet de l'étudiant selon la phase en cours.
+// Jeton transmis par l'en-tête « Authorization: Bearer … » (repli ?token=
+// accepté pour les onglets ouverts avant une mise à jour).
 export async function GET(req: NextRequest) {
   try {
-    const token = req.nextUrl.searchParams.get('token') || ''
+    const token = extractToken(req)
     if (!token) {
       return NextResponse.json({ error: 'Jeton manquant.' }, { status: 400 })
     }
@@ -54,11 +56,14 @@ export async function GET(req: NextRequest) {
         }),
         db.answer.findMany({
           where: { studentId: student.id, kind: 'irat', question: { phase: 'rat' } },
+          // v2.4.0 : champs strictement nécessaires (allège le sondage)
+          select: { questionId: true, choice: true, isCorrect: true, score: true },
         }),
         student.teamId
           ? db.answer.findMany({
               where: { teamId: student.teamId, kind: 'trat', question: { phase: 'rat' } },
               orderBy: { attempt: 'asc' },
+              select: { questionId: true, choice: true, attempt: true, isCorrect: true, score: true },
             })
           : Promise.resolve([]),
         student.teamId

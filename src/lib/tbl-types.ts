@@ -260,10 +260,20 @@ export const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
 
 /** Suggestion de PIN robuste (côté navigateur, alphabet sans caractères
  * ambigus : pas de O/0 ni I/1) — l'enseignant peut la garder ou la modifier.
- * Utilisée à la création d'une séance et à la duplication. */
+ * Utilisée à la création d'une séance et à la duplication.
+ * v2.4.0 : crypto.getRandomValues (générateur cryptographique du navigateur)
+ * plutôt que Math.random — cohérent avec randomBytes côté serveur. L'alphabet
+ * fait exactement 32 caractères : le modulo est sans biais. */
 export function suggestPin(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const buf = new Uint32Array(6)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(buf)
+  } else {
+    // Repli théorique (navigateurs antérieurs à 2017) :
+    for (let i = 0; i < 6; i++) buf[i] = Math.floor(Math.random() * 0x100000000)
+  }
   let out = ''
-  for (let i = 0; i < 6; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)]
+  for (let i = 0; i < 6; i++) out += alphabet[buf[i] % alphabet.length]
   return out
 }

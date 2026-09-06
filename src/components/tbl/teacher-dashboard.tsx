@@ -64,7 +64,12 @@ export function TeacherDashboard({
   onOpenSession: (code: string, token: string, title: string) => void
 }) {
   const { data, error, loading, refresh } = usePoll<DashboardDTO>(
-    () => api<DashboardDTO>(`/api/sessions/${code}/dashboard?token=${encodeURIComponent(token)}`),
+    // v2.4.0 : jeton dans l'en-tête Authorization (plus jamais dans l'URL
+    // des appels API → n'apparaît pas dans les journaux serveur).
+    () =>
+      api<DashboardDTO>(`/api/sessions/${code}/dashboard`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
     2500
   )
   const { toast } = useToast()
@@ -76,6 +81,9 @@ export function TeacherDashboard({
   const [confirmDuplicate, setConfirmDuplicate] = useState(false)
   const [dupPin, setDupPin] = useState('')
   const [duplicating, setDuplicating] = useState(false)
+  // v2.4.0 : sauvegarde complète (JSON) — copie hors-ligne de toutes les
+  // données de la séance, à télécharger avant chaque mise à jour.
+  const [backingUp, setBackingUp] = useState(false)
   const { t } = useI18n()
 
   useEffect(() => {
@@ -136,6 +144,34 @@ export function TeacherDashboard({
       })
     } finally {
       setDuplicating(false)
+    }
+  }
+
+  // Sauvegarde complète : télécharge un fichier JSON contenant questions,
+  // cas, équipes, étudiants, réponses, réclamations et évaluations.
+  const doBackup = async () => {
+    setBackingUp(true)
+    try {
+      const res = await api<Record<string, unknown>>(`/api/sessions/${code}/manage`, {
+        method: 'POST',
+        body: JSON.stringify({ token, action: 'export_backup' }),
+      })
+      const blob = new Blob([JSON.stringify(res, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `sauvegarde-tbl-${code}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast({ title: t('Fichier de sauvegarde téléchargé.') })
+    } catch (e) {
+      toast({
+        title: t('Action impossible'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
+        variant: 'destructive',
+      })
+    } finally {
+      setBackingUp(false)
     }
   }
 
@@ -211,6 +247,17 @@ export function TeacherDashboard({
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-stone-300"
+              onClick={doBackup}
+              disabled={backingUp}
+              title={t('Télécharger une copie complète de la séance (fichier JSON)')}
+            >
+              <Download className="mr-1 h-4 w-4" />
+              {t('Sauvegarder')}
+            </Button>
             <Button
               variant="outline"
               size="sm"

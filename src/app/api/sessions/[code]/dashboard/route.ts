@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getSessionByCode, parseChoices } from '@/lib/tbl'
+import { getSessionByCode, parseChoices, extractToken, safeEqualStrings } from '@/lib/tbl'
 import { applyLifecycle } from '@/lib/session-lifecycle'
 
-// GET /api/sessions/[code]/dashboard?token= — données complètes du tableau de bord enseignant
+// GET /api/sessions/[code]/dashboard — données complètes du tableau de bord
+// enseignant. Jeton transmis par l'en-tête « Authorization: Bearer … » (les
+// URL des appels API ne contiennent plus le jeton → il n'apparaît pas dans
+// les journaux serveur) ; le repli ?token= reste accepté (onglets ouverts
+// avant une mise à jour de l'application).
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
   try {
     const { code } = await params
-    const token = req.nextUrl.searchParams.get('token') || ''
+    const token = extractToken(req)
     const session = await getSessionByCode(code)
     if (!session) {
       return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
     }
-    if (!token || token !== session.teacherToken) {
+    if (!token || !safeEqualStrings(token, session.teacherToken)) {
       return NextResponse.json({ error: 'Accès refusé. Reconnectez-vous.' }, { status: 401 })
     }
 

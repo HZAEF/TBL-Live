@@ -31,7 +31,13 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-debugger": "error",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills/**", "scripts/**"],
+  ignores: [
+    "node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts",
+    "examples/**", "skills/**", "scripts/**",
+    // Copies de vérification d'anciennes versions (artefacts de test,
+    // pas du code vivant) et captures de travail.
+    "patch-staging/**", "tool-results/**", "download/**", "tests/**",
+  ],
 }];
 
 export default eslintConfig;

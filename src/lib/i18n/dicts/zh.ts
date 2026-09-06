@@ -646,4 +646,8 @@ export const zh: Record<string, string> = {
   "Vous pourrez aussi le revoir dans la séance (bouton « code » en haut de l’écran) ou le demander à votre professeur.": "您之后也可以在课程中（屏幕顶部的“恢复码”按钮）再次查看，或向您的老师索取。",
   "TBL Live — Application libre d’apprentissage en équipe, pour l’enseignement.": "TBL Live — 面向教学的免费团队学习应用。",
   "iRAT · tRAT · Réclamations · Application · Évaluation par les pairs": "iRAT · tRAT · 申诉 · 应用 · 同伴互评",
+  "Double envoi détecté : votre équipe a déjà répondu à cette question.": "检测到重复提交：您的团队已回答过此问题。",
+  "Fichier de sauvegarde téléchargé.": "备份文件已下载。",
+  "Sauvegarder": "备份",
+  "Télécharger une copie complète de la séance (fichier JSON)": "下载整场课程的完整副本（JSON 文件）",
 }

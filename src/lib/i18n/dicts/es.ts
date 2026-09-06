@@ -646,4 +646,8 @@ export const es: Record<string, string> = {
   "Vous pourrez aussi le revoir dans la séance (bouton « code » en haut de l’écran) ou le demander à votre professeur.": "También podrás volver a verlo en la sesión (botón «código» en la parte superior de la pantalla) o pedírselo a tu profesor.",
   "TBL Live — Application libre d’apprentissage en équipe, pour l’enseignement.": "TBL Live — aplicación libre de aprendizaje en equipo para la docencia.",
   "iRAT · tRAT · Réclamations · Application · Évaluation par les pairs": "iRAT · tRAT · Apelaciones · Aplicación · Evaluación entre pares",
+  "Double envoi détecté : votre équipe a déjà répondu à cette question.": "Envío duplicado detectado: tu equipo ya ha respondido a esta pregunta.",
+  "Fichier de sauvegarde téléchargé.": "Archivo de copia de seguridad descargado.",
+  "Sauvegarder": "Guardar copia",
+  "Télécharger une copie complète de la séance (fichier JSON)": "Descargar una copia completa de la sesión (archivo JSON)",
 };

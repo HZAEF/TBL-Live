@@ -646,4 +646,8 @@ export const ru: Record<string, string> = {
   "Vous pourrez aussi le revoir dans la séance (bouton « code » en haut de l’écran) ou le demander à votre professeur.": "Вы также сможете снова увидеть его в занятии (кнопка «код» вверху экрана) или запросить у преподавателя.",
   "TBL Live — Application libre d’apprentissage en équipe, pour l’enseignement.": "TBL Live — бесплатное приложение для командного обучения в преподавании.",
   "iRAT · tRAT · Réclamations · Application · Évaluation par les pairs": "iRAT · tRAT · Апелляции · Применение · Взаимооценка",
+  "Double envoi détecté : votre équipe a déjà répondu à cette question.": "Обнаружена повторная отправка: ваша команда уже ответила на этот вопрос.",
+  "Fichier de sauvegarde téléchargé.": "Файл резервной копии скачан.",
+  "Sauvegarder": "Сохранить копию",
+  "Télécharger une copie complète de la séance (fichier JSON)": "Скачать полную копию занятия (файл JSON)",
 }

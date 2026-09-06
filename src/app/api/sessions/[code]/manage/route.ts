@@ -9,7 +9,9 @@ import {
   randomCode,
   isValidPin,
   normalizePin,
+  safeEqualStrings,
 } from '@/lib/tbl'
+import { hashPin } from '@/lib/pin'
 import { isTrashExpired } from '@/lib/session-lifecycle'
 // Renumérote les questions « libres » d'une phase (rat ou application,
 // sans cas associé) : 0, 1, 2, … Garantit un ordre stable et sans doublons
@@ -56,16 +58,19 @@ export async function POST(
     if (!session) {
       return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
     }
-    if (token !== session.teacherToken) {
+    if (!safeEqualStrings(token, session.teacherToken)) {
       return NextResponse.json({ error: 'Accès refusé. Reconnectez-vous.' }, { status: 401 })
     }
 
     // Séance en corbeille : les étudiants n'ont plus accès, le déroulé est
-    // figé. Seules la restauration et la suppression définitive sont admises.
+    // figé. Seules la restauration, la sauvegarde (on peut vouloir archiver
+    // juste avant de supprimer définitivement) et la suppression
+    // définitive sont admises.
     if (
       session.deletedAt &&
       action !== 'restore_session' &&
-      action !== 'delete_forever'
+      action !== 'delete_forever' &&
+      action !== 'export_backup'
     ) {
       return NextResponse.json(
         {
@@ -524,6 +529,8 @@ export async function POST(
         ])
         const newCode = await generateUniqueCode()
         const teacherToken = randomToken()
+        // v2.4.0 : le PIN de la copie est stocké haché, comme à la création.
+        const teacherPinHash = await hashPin(pin)
         const baseTitle = session.title.replace(/ \(copie( \d+)?\)$/, '')
         // Évite les « (copie) », « (copie) (copie) »… si on duplique une copie.
         let title = `${baseTitle} (copie)`
@@ -539,7 +546,7 @@ export async function POST(
           data: {
             code: newCode,
             title,
-            teacherPin: pin,
+            teacherPin: teacherPinHash,
             teacherToken,
             iratMinutes: session.iratMinutes,
             status: 'lobby',
@@ -589,6 +596,71 @@ export async function POST(
           teacherToken,
           title,
           pin,
+        })
+      }
+
+      case 'export_backup': {
+        // v2.4.0 — Sauvegarde complète de la séance (JSON) : copie hors-ligne
+        // de TOUTES les données — questions, cas, équipes, étudiants (avec
+        // leurs codes de reprise), réponses, réclamations, évaluations.
+        // À télécharger avant chaque mise à jour de l'application.
+        // Les secrets (PIN haché, jetons enseignant/étudiants) sont exclus.
+        const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals] =
+          await Promise.all([
+            db.team.findMany({
+              where: { sessionId: session.id },
+              orderBy: { number: 'asc' },
+            }),
+            db.student.findMany({
+              where: { sessionId: session.id },
+              orderBy: { createdAt: 'asc' },
+              select: { id: true, name: true, teamId: true, recoveryCode: true, createdAt: true },
+            }),
+            db.question.findMany({
+              where: { sessionId: session.id },
+              orderBy: [{ order: 'asc' }, { id: 'asc' }],
+            }),
+            db.case.findMany({
+              where: { sessionId: session.id },
+              orderBy: [{ order: 'asc' }, { id: 'asc' }],
+            }),
+            db.answer.findMany({
+              where: { question: { sessionId: session.id } },
+              orderBy: { createdAt: 'asc' },
+            }),
+            db.appeal.findMany({
+              where: { sessionId: session.id },
+              orderBy: { createdAt: 'asc' },
+            }),
+            db.appAnswer.findMany({
+              where: { team: { sessionId: session.id } },
+            }),
+            db.peerEval.findMany({
+              where: { sessionId: session.id },
+              orderBy: { createdAt: 'asc' },
+            }),
+          ])
+        return NextResponse.json({
+          format: 'tbl-live-sauvegarde',
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          session: {
+            code: session.code,
+            title: session.title,
+            status: session.status,
+            iratMinutes: session.iratMinutes,
+            createdAt: session.createdAt,
+            deletedAt: session.deletedAt,
+            dataPurgedAt: session.dataPurgedAt,
+          },
+          teams,
+          students,
+          questions,
+          cases,
+          answers,
+          appeals,
+          appAnswers,
+          peerEvals,
         })
       }
 

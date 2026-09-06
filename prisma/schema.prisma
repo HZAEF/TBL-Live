@@ -143,6 +143,13 @@ model Answer {
   // le double comptage d'une réponse iRAT lors de requêtes concurrentes.
   @@unique([studentId, questionId, kind])
 
+  // v2.4.0 — Une seule tentative tRAT par (équipe, question, numéro) :
+  // verrou DÉFINITIF contre deux clics vraiment simultanés dans la même
+  // équipe (isolation « read committed » de PostgreSQL). Les réponses iRAT
+  // (teamId = null) ne sont pas affectées. La route /api/team-answer traduit
+  // la violation (P2002) en message clair « double envoi détecté ».
+  @@unique([teamId, questionId, kind, attempt])
+
   @@index([questionId])
   @@index([studentId])
   @@index([teamId])

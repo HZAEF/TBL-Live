@@ -26,7 +26,10 @@ export function StudentPanel({ onExit }: { onExit: () => void }) {
     let alive = true
     const last = getLastStudentSession()
     if (last) {
-      api<{ me: { name: string } }>(`/api/student?token=${encodeURIComponent(last.token)}`)
+      // v2.4.0 : jeton dans l'en-tête Authorization (hors des journaux serveur)
+      api<{ me: { name: string } }>('/api/student', {
+        headers: { Authorization: `Bearer ${last.token}` },
+      })
         .then(() => alive && setToken(last.token))
         .catch(() => alive && removeStudentSession(last.code))
         .finally(() => alive && setChecking(false))

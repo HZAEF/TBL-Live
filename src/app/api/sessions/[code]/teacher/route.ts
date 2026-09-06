@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionByCode, normalizePin, PIN_MAX_ATTEMPTS, PIN_LOCK_MINUTES } from '@/lib/tbl'
+import { verifyPin, migratePinToHash } from '@/lib/pin'
 import { applyLifecycle } from '@/lib/session-lifecycle'
 
 // POST /api/sessions/[code]/teacher — connexion enseignant (PIN)
@@ -48,7 +49,13 @@ export async function POST(
       )
     }
 
-    if (session.teacherPin !== normalizePin(pin)) {
+    // v2.4.0 : le PIN stocké est un haché bcrypt (les séances créées avant
+    // la v2.4.0 sont vérifiées en clair puis re-hachées à la volée — la
+    // migration est invisible pour l'enseignant). Le verrouillage anti
+    // force-brute ci-dessus reste inchangé.
+    const candidate = normalizePin(pin)
+    const verdict = await verifyPin(session.teacherPin, candidate)
+    if (!verdict.ok) {
       const attempts = session.pinAttempts + 1
       if (attempts >= PIN_MAX_ATTEMPTS) {
         // Dernière tentative consommée : on verrouille et on repart de zéro
@@ -86,6 +93,10 @@ export async function POST(
         where: { id: session.id },
         data: { pinAttempts: 0, pinLockedUntil: null },
       })
+    }
+    // Ancienne séance (PIN encore en clair) : re-hachage immédiat.
+    if (verdict.needsRehash) {
+      await migratePinToHash(session.id, candidate)
     }
 
     return NextResponse.json({ code: session.code, teacherToken: session.teacherToken })

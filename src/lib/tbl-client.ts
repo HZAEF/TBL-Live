@@ -38,13 +38,22 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T
 }
 
-// Sondage régulier : données quasi temps réel sans configuration complexe
-export function usePoll<T>(fn: () => Promise<T>, intervalMs = 2500) {
+// Sondage régulier : données quasi temps réel sans configuration complexe.
+// Le délai peut être un nombre fixe, ou une FONCTION de la dernière donnée
+// reçue (délai adaptatif — v2.4.0 : l'écran étudiant sonde à 2,5 s pendant
+// les tests et 5 s pendant les phases d'attente, pour alléger la base).
+export type PollInterval<T> = number | ((data: T | null) => number)
+
+export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2500) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
   const [loading, setLoading] = useState(true)
   const fnRef = useRef(fn)
   fnRef.current = fn
+  const intervalRef = useRef(intervalMs)
+  intervalRef.current = intervalMs
+  const dataRef = useRef<T | null>(null)
+  dataRef.current = data
 
   useEffect(() => {
     let alive = true
@@ -54,6 +63,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs = 2500) {
         const d = await fnRef.current()
         if (alive) {
           setData(d)
+          dataRef.current = d
           setError(null)
         }
       } catch (e) {
@@ -61,7 +71,9 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs = 2500) {
       } finally {
         if (alive) {
           setLoading(false)
-          timer = setTimeout(run, intervalMs)
+          const iv = intervalRef.current
+          const delay = typeof iv === 'function' ? iv(dataRef.current) : iv
+          timer = setTimeout(run, delay)
         }
       }
     }
@@ -70,7 +82,10 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs = 2500) {
       alive = false
       if (timer) clearTimeout(timer)
     }
-  }, [intervalMs])
+    // Montage unique : fn, interval et data sont suivis par refs — le
+    // comportement est identique à l'ancienne implémentation (deps
+    // [intervalMs] avec un nombre qui ne changeait jamais).
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
