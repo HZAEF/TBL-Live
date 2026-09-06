@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { api, getLastStudentSession, saveStudentSession, removeStudentSession } from '@/lib/tbl-client'
 import type { PublicSessionDTO } from '@/lib/tbl-types'
+import { useI18n } from '@/lib/i18n'
 import { StudentSession } from './student-session'
 
 export function StudentPanel({ onExit }: { onExit: () => void }) {
@@ -57,7 +58,7 @@ export function StudentPanel({ onExit }: { onExit: () => void }) {
     )
   }
 
-  return <JoinForm onJoined={(t) => setToken(t)} onExit={onExit} />
+  return <JoinForm onJoined={(tk) => setToken(tk)} onExit={onExit} />
 }
 
 function JoinForm({
@@ -67,6 +68,7 @@ function JoinForm({
   onJoined: (token: string) => void
   onExit: () => void
 }) {
+  const { t } = useI18n()
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [recoveryCode, setRecoveryCode] = useState('')
@@ -86,7 +88,7 @@ function JoinForm({
       return
     }
     let alive = true
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       try {
         const info = await api<PublicSessionDTO>(`/api/sessions/${code}`)
         if (alive) {
@@ -96,23 +98,24 @@ function JoinForm({
       } catch (e) {
         if (alive) {
           setSessionInfo(null)
-          setCodeError(e instanceof Error ? e.message : 'Séance introuvable.')
+          setCodeError(e instanceof Error ? e.message : t('Séance introuvable.'))
         }
       }
     }, 400)
     return () => {
       alive = false
-      clearTimeout(t)
+      clearTimeout(timer)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code])
 
   const submit = async () => {
     if (code.length !== 6) {
-      setError('Saisissez le code à 6 caractères donné par votre professeur.')
+      setError(t('Saisissez le code à 6 caractères donné par votre professeur.'))
       return
     }
     if (name.trim().length < 2) {
-      setError('Saisissez votre nom (au moins 2 caractères).')
+      setError(t('Saisissez votre nom (au moins 2 caractères).'))
       return
     }
     setError('')
@@ -135,7 +138,7 @@ function JoinForm({
         }),
       })
       const teamName =
-        sessionInfo?.teams.find((t) => t.id === res.teamId)?.name ?? undefined
+        sessionInfo?.teams.find((tm) => tm.id === res.teamId)?.name ?? undefined
       saveStudentSession({
         code,
         token: res.token,
@@ -152,7 +155,7 @@ function JoinForm({
         onJoined(res.token)
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur inconnue.')
+      setError(e instanceof Error ? e.message : t('Erreur inconnue.'))
     } finally {
       setLoading(false)
     }
@@ -166,29 +169,30 @@ function JoinForm({
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
             <KeyRound className="h-6 w-6" />
           </div>
-          <h2 className="mt-3 text-xl font-bold text-stone-900">Bienvenue !</h2>
+          <h2 className="mt-3 text-xl font-bold text-stone-900">{t('Bienvenue !')}</h2>
           <p className="mt-1 text-sm text-stone-600">
-            Notez précieusement votre <b>code de reprise personnel</b> — il vous
-            permettra de retrouver votre séance si vous changez d&apos;appareil ou
-            perdez la connexion :
+            {t(
+              'Notez précieusement votre code de reprise personnel — il vous permettra de retrouver votre séance si vous changez d’appareil ou perdez la connexion :'
+            )}
           </p>
           <p className="mt-4 select-all rounded-xl bg-stone-900 px-4 py-3 font-mono text-2xl font-bold tracking-[0.35em] text-emerald-300">
             {welcome.recoveryCode}
           </p>
           <p className="mt-3 text-xs text-stone-500">
-            Vous pourrez aussi le revoir dans la séance (bouton « code » en haut
-            de l&apos;écran) ou le demander à votre professeur.
+            {t(
+              'Vous pourrez aussi le revoir dans la séance (bouton « code » en haut de l’écran) ou le demander à votre professeur.'
+            )}
           </p>
           <Button
             onClick={() => onJoined(welcome.token)}
             className="mt-5 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
           >
-            J&apos;ai noté mon code — entrer dans la séance
+            {t('J’ai noté mon code — entrer dans la séance')}
           </Button>
         </div>
         <Button variant="ghost" onClick={onExit} className="w-full text-stone-500">
-          <LogOut className="mr-1 h-4 w-4" />
-          Retour à l&apos;accueil
+          <LogOut className="mr-1 h-4 w-4 rtl:rotate-180" />
+          {t('Retour à l’accueil')}
         </Button>
       </div>
     )
@@ -197,15 +201,15 @@ function JoinForm({
   return (
     <div className="mx-auto max-w-md space-y-4">
       <div className="text-center">
-        <h1 className="text-2xl font-bold text-stone-900">Rejoindre la séance</h1>
+        <h1 className="text-2xl font-bold text-stone-900">{t('Rejoindre la séance')}</h1>
         <p className="mt-1 text-sm text-stone-600">
-          Entrez le code affiché au tableau par votre professeur.
+          {t('Entrez le code affiché au tableau par votre professeur.')}
         </p>
       </div>
 
       <div className="space-y-4 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
         <div>
-          <Label htmlFor="s-code">Code de la séance</Label>
+          <Label htmlFor="s-code">{t('Code de la séance')}</Label>
           <Input
             id="s-code"
             value={code}
@@ -225,29 +229,33 @@ function JoinForm({
             <div className="rounded-xl bg-emerald-50 p-3 text-center">
               <p className="text-sm font-semibold text-emerald-800">{sessionInfo.title}</p>
               <p className="text-xs text-emerald-700">
-                {sessionInfo.studentCount} étudiant(s) déjà inscrit(s)
+                {t('{n} étudiant(s) déjà inscrit(s)', { n: sessionInfo.studentCount })}
               </p>
             </div>
 
             <div>
-              <Label htmlFor="s-name">Votre nom</Label>
+              <Label htmlFor="s-name">{t('Votre nom')}</Label>
               <Input
                 id="s-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Prénom + nom de famille"
+                placeholder={t('Prénom + nom de famille')}
                 className="mt-1.5 h-12 text-base"
                 autoCapitalize="words"
               />
               <p className="mt-1 text-xs text-stone-500">
-                Mettez votre prénom ET votre nom de famille : deux élèves au même
-                prénom doivent se différencier.
+                {t(
+                  'Mettez votre prénom ET votre nom de famille : deux élèves au même prénom doivent se différencier.'
+                )}
               </p>
             </div>
 
             <div>
               <Label htmlFor="s-recovery">
-                Code de reprise <span className="font-normal text-stone-400">(si vous reprenez votre séance)</span>
+                {t('Code de reprise')}{' '}
+                <span className="font-normal text-stone-400">
+                  {t('(si vous reprenez votre séance)')}
+                </span>
               </Label>
               <Input
                 id="s-recovery"
@@ -255,30 +263,31 @@ function JoinForm({
                 onChange={(e) =>
                   setRecoveryCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))
                 }
-                placeholder="Ex. 7KQ2MP — uniquement si vous êtes déjà inscrit"
+                placeholder={t('Ex. 7KQ2MP — uniquement si vous êtes déjà inscrit')}
                 className="mt-1.5 h-11 font-mono tracking-widest"
                 autoCapitalize="characters"
               />
               <p className="mt-1 text-xs text-stone-500">
-                Première connexion ? Laissez vide. Vous changez d&apos;appareil ? Entrez le code
-                reçu lors de votre première connexion (ou demandez-le au professeur).
+                {t(
+                  'Première connexion ? Laissez vide. Vous changez d’appareil ? Entrez le code reçu lors de votre première connexion (ou demandez-le au professeur).'
+                )}
               </p>
             </div>
 
             {sessionInfo.teams.length > 0 && (
               <div>
-                <Label>Votre équipe</Label>
+                <Label>{t('Votre équipe')}</Label>
                 <Select value={teamId} onValueChange={setTeamId}>
                   <SelectTrigger className="mt-1.5 h-12 text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="auto">
-                      🎲 Placement automatique (équipe la moins remplie)
+                      🎲 {t('Placement automatique (équipe la moins remplie)')}
                     </SelectItem>
-                    {sessionInfo.teams.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name}
+                    {sessionInfo.teams.map((tm) => (
+                      <SelectItem key={tm.id} value={tm.id}>
+                        {tm.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -299,19 +308,20 @@ function JoinForm({
           disabled={loading || !sessionInfo}
           className="h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
         >
-          {loading ? 'Connexion…' : 'Rejoindre la séance'}
-          <ArrowRight className="ml-2 h-5 w-5" />
+          {loading ? t('Connexion…') : t('Rejoindre la séance')}
+          <ArrowRight className="ml-2 h-5 w-5 rtl:rotate-180" />
         </Button>
 
         <p className="text-center text-xs text-stone-500">
-          Si vous changez de téléphone en cours de séance : même code de séance, même nom, et votre
-          code de reprise — vous retrouvez alors toutes vos réponses.
+          {t(
+            'Si vous changez de téléphone en cours de séance : même code de séance, même nom, et votre code de reprise — vous retrouvez alors toutes vos réponses.'
+          )}
         </p>
       </div>
 
       <Button variant="ghost" onClick={onExit} className="w-full text-stone-500">
-        <LogOut className="mr-1 h-4 w-4" />
-        Retour à l&apos;accueil
+        <LogOut className="mr-1 h-4 w-4 rtl:rotate-180" />
+        {t('Retour à l’accueil')}
       </Button>
     </div>
   )

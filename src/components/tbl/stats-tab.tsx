@@ -19,6 +19,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { DashboardDTO } from '@/lib/tbl-types'
 import { LETTERS } from '@/lib/tbl-types'
+import { t, useI18n, formatDate } from '@/lib/i18n'
 import {
   alphaInterp,
   analyzeSection,
@@ -79,11 +80,12 @@ function StatCell({
   interp?: Interp | null
   tone?: Tone
 }) {
+  const { t } = useI18n()
   return (
     <span className="inline-flex flex-col items-center leading-tight">
       <span className="font-bold text-stone-800">{value}</span>
       {interp && (
-        <span className={cn('text-[10px]', TONE_TEXT[interp.tone])}>{interp.label}</span>
+        <span className={cn('text-[10px]', TONE_TEXT[interp.tone])}>{t(interp.label)}</span>
       )}
       {!interp && tone && <span className={cn('text-[10px]', TONE_TEXT[tone])}>&nbsp;</span>}
     </span>
@@ -92,6 +94,7 @@ function StatCell({
 
 /** Répartition des choix : « A 63 % · B 25 % · … » (bonne réponse en vert). */
 function OptionsCell({ item }: { item: ItemAnalysis }) {
+  const { t } = useI18n()
   const n = item.n
   return (
     <div className="flex flex-wrap justify-center gap-x-2 gap-y-0.5 text-[10px] leading-tight">
@@ -100,7 +103,7 @@ function OptionsCell({ item }: { item: ItemAnalysis }) {
         return (
           <span
             key={o.index}
-            title={`${o.count} réponse(s)`}
+            title={t('{n} réponse(s)', { n: o.count })}
             className={cn(
               o.isCorrect
                 ? 'font-bold text-emerald-700'
@@ -114,8 +117,8 @@ function OptionsCell({ item }: { item: ItemAnalysis }) {
         )
       })}
       {item.nMissing > 0 && (
-        <span className="text-stone-400" title="n'ont pas répondu">
-          sans rép. {item.nMissing}
+        <span className="text-stone-400" title={t("n'ont pas répondu")}>
+          {t('sans rép. {n}', { n: item.nMissing })}
         </span>
       )}
     </div>
@@ -124,12 +127,13 @@ function OptionsCell({ item }: { item: ItemAnalysis }) {
 
 /** Répartition IF-AT d'une question tRAT : nb d'équipes à 4 / 2 / 1 / 0 point. */
 function IfatCell({ item }: { item: ItemAnalysis }) {
+  const { t } = useI18n()
   if (!item.ifat) return <span className="text-stone-300">—</span>
   const cells: [string, number][] = [
-    ['4 pts', item.ifat.c4],
-    ['2 pts', item.ifat.c2],
-    ['1 pt', item.ifat.c1],
-    ['0 pt', item.ifat.c0],
+    [t('4 pts'), item.ifat.c4],
+    [t('2 pts'), item.ifat.c2],
+    [t('1 pt'), item.ifat.c1],
+    [t('0 pt'), item.ifat.c0],
   ]
   return (
     <span className="inline-flex gap-1">
@@ -170,67 +174,74 @@ function DistributionBars({ dist }: { dist: { label: string; count: number }[] }
 // ---------- Glossaire ----------
 
 function Glossary() {
+  const { t } = useI18n()
   return (
     <Collapsible>
-      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-2xl border border-stone-200 bg-white px-4 py-3 text-left text-sm font-semibold text-stone-700 hover:bg-stone-50">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-2xl border border-stone-200 bg-white px-4 py-3 text-start text-sm font-semibold text-stone-700 hover:bg-stone-50">
         <BookOpen className="h-4 w-4 text-emerald-600" />
-        Comprendre les indices docimologiques
-        <span className="ml-auto text-xs font-normal text-stone-400">cliquer pour déplier</span>
+        {t('Comprendre les indices docimologiques')}
+        <span className="ms-auto text-xs font-normal text-stone-400">
+          {t('cliquer pour déplier')}
+        </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <dl className="mt-2 space-y-3 rounded-2xl border border-stone-200 bg-white p-4 text-xs leading-relaxed text-stone-600">
           <div>
-            <dt className="font-bold text-stone-800">Indice de difficulté (p)</dt>
+            <dt className="font-bold text-stone-800">{t('Indice de difficulté (p)')}</dt>
             <dd>
-              Proportion de répondants qui choisissent la bonne réponse (p = 0,62 → 62 % de
-              réussite). Zone recommandée : 0,30 à 0,90 ; un test bien calibré vise une moyenne
-              autour de 0,50 à 0,75. p très élevé = question trop facile (peu informative) ; p
-              très bas = question très difficile.
+              {t(
+                'Proportion de répondants qui choisissent la bonne réponse (p = 0,62 → 62 % de réussite). Zone recommandée : 0,30 à 0,90 ; un test bien calibré vise une moyenne autour de 0,50 à 0,75. p très élevé = question trop facile (peu informative) ; p très bas = question très difficile.'
+              )}
             </dd>
           </div>
           <div>
-            <dt className="font-bold text-stone-800">Indice de discrimination (D)</dt>
+            <dt className="font-bold text-stone-800">{t('Indice de discrimination (D)')}</dt>
             <dd>
-              Écart de réussite entre les 27 % de répondants les plus forts et les 27 % les plus
-              faibles (sur le score total). D ≥ 0,30 : la question sépare bien forts et faibles ;
-              D &lt; 0,20 : à réviser ; D négatif : les plus faibles réussissent mieux — défaut
-              sérieux (question ambiguë ou erronée).
+              {t(
+                'Écart de réussite entre les 27 % de répondants les plus forts et les 27 % les plus faibles (sur le score total). D ≥ 0,30 : la question sépare bien forts et faibles ; D < 0,20 : à réviser ; D négatif : les plus faibles réussissent mieux — défaut sérieux (question ambiguë ou erronée).'
+              )}
             </dd>
           </div>
           <div>
-            <dt className="font-bold text-stone-800">Corrélation point-bisériale (r pbs)</dt>
+            <dt className="font-bold text-stone-800">{t('Corrélation point-bisériale (r pbs)')}</dt>
             <dd>
-              Lien entre la réussite à la question et le score au reste du test (−1 à +1). ≥ 0,30
-              souhaité ; &lt; 0,20 : la question mesure autre chose que le reste du test.
+              {t(
+                'Lien entre la réussite à la question et le score au reste du test (−1 à +1). ≥ 0,30 souhaité ; < 0,20 : la question mesure autre chose que le reste du test.'
+              )}
             </dd>
           </div>
           <div>
-            <dt className="font-bold text-stone-800">Fidélité (KR-20 / alpha de Cronbach)</dt>
+            <dt className="font-bold text-stone-800">
+              {t('Fidélité (KR-20 / alpha de Cronbach)')}
+            </dt>
             <dd>
-              Homogénéité de l&apos;ensemble du test (0 à 1). ≥ 0,70 acceptable en classe. Avec
-              peu de questions (&lt; 10) ou de petits effectifs, un alpha modeste est normal — il
-              s&apos;interprète avec prudence.
+              {t(
+                'Homogénéité de l’ensemble du test (0 à 1). ≥ 0,70 acceptable en classe. Avec peu de questions (< 10) ou de petits effectifs, un alpha modeste est normal — il s’interprète avec prudence.'
+              )}
             </dd>
           </div>
           <div>
-            <dt className="font-bold text-stone-800">Erreur standard de mesure (SEM)</dt>
+            <dt className="font-bold text-stone-800">
+              {t('Erreur standard de mesure (SEM)')}
+            </dt>
             <dd>
-              Marge d&apos;erreur sur le score d&apos;un répondant : score observé ± SEM. Le SEM
-              diminue quand la fidélité augmente.
+              {t(
+                'Marge d’erreur sur le score d’un répondant : score observé ± SEM. Le SEM diminue quand la fidélité augmente.'
+              )}
             </dd>
           </div>
           <div>
-            <dt className="font-bold text-stone-800">Analyse des distracteurs</dt>
+            <dt className="font-bold text-stone-800">{t('Analyse des distracteurs')}</dt>
             <dd>
-              Répartition des choix pour chaque option. Un distracteur choisi par moins de 5 % des
-              répondants (barré dans les tableaux) ne remplit pas son rôle : à réécrire ou
-              remplacer. Au tRAT, l&apos;analyse porte sur le choix du 1ᵉʳ essai (avant grattage).
+              {t(
+                'Répartition des choix pour chaque option. Un distracteur choisi par moins de 5 % des répondants (barré dans les tableaux) ne remplit pas son rôle : à réécrire ou remplacer. Au tRAT, l’analyse porte sur le choix du 1ᵉʳ essai (avant grattage).'
+              )}
             </dd>
           </div>
           <p className="rounded-xl bg-stone-50 p-3 text-[11px] text-stone-500">
-            Seuils usuels de la docimologie (Ebel &amp; Frisbie ; Nunnally) à titre indicatif :
-            avec moins de ~10 répondants — ou moins de ~6 équipes — D, r pbs et alpha perdent de
-            la précision et s&apos;interprètent comme des tendances.
+            {t(
+              'Seuils usuels de la docimologie (Ebel & Frisbie ; Nunnally) à titre indicatif : avec moins de ~10 répondants — ou moins de ~6 équipes — D, r pbs et alpha perdent de la précision et s’interprètent comme des tendances.'
+            )}
           </p>
         </dl>
       </CollapsibleContent>
@@ -241,59 +252,61 @@ function Glossary() {
 // ---------- Cartes de synthèse ----------
 
 function SynthesisCard({ kind, analysis }: { kind: SectionKind; analysis: SectionAnalysis }) {
+  const { t } = useI18n()
   const titles: Record<SectionKind, string> = {
     irat: 'Test individuel (iRAT)',
     trat: 'Test en équipe (tRAT)',
-    application: 'Cas cliniques d\u2019application',
+    application: 'Cas cliniques d’application',
   }
-  const t = analysis.test
-  const small = t.n < 10
+  const tst = analysis.test
+  const small = tst.n < 10
   return (
     <div className="rounded-2xl border border-stone-200 bg-white p-4">
-      <h4 className="text-sm font-bold text-stone-800">{titles[kind]}</h4>
+      <h4 className="text-sm font-bold text-stone-800">{t(titles[kind])}</h4>
       <p className="mb-2 text-[11px] text-stone-500">
-        {t.n} {analysis.data.unitLabel} · {t.k} question(s) · max {t.maxScore} pts
+        {tst.n} {t(analysis.data.unitLabel)} · {t('{k} question(s)', { k: tst.k })} · max{' '}
+        {tst.maxScore} pts
       </p>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
         <div className="col-span-2 flex items-baseline justify-between border-b border-stone-100 pb-1">
-          <dt className="text-stone-500">Moyenne</dt>
+          <dt className="text-stone-500">{t('Moyenne')}</dt>
           <dd className="font-bold text-stone-800">
-            {fmtNum(t.mean)} pts
+            {fmtNum(tst.mean)} pts
             <span className="ml-1.5 font-normal text-stone-500">
-              ({fmtNum(t.mean20)}/20)
+              ({fmtNum(tst.mean20)}/20)
             </span>
           </dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-stone-500">Écart-type</dt>
-          <dd className="font-semibold text-stone-700">{fmtNum(t.sd)}</dd>
+          <dt className="text-stone-500">{t('Écart-type')}</dt>
+          <dd className="font-semibold text-stone-700">{fmtNum(tst.sd)}</dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-stone-500">Médiane</dt>
-          <dd className="font-semibold text-stone-700">{fmtNum(t.median)}</dd>
+          <dt className="text-stone-500">{t('Médiane')}</dt>
+          <dd className="font-semibold text-stone-700">{fmtNum(tst.median)}</dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-stone-500">Min – Max</dt>
+          <dt className="text-stone-500">{t('Min – Max')}</dt>
           <dd className="font-semibold text-stone-700">
-            {fmtNum(t.min, 0)} – {fmtNum(t.max, 0)}
+            {fmtNum(tst.min, 0)} – {fmtNum(tst.max, 0)}
           </dd>
         </div>
         <div className="flex justify-between">
           <dt className="text-stone-500">SEM</dt>
-          <dd className="font-semibold text-stone-700">{fmtNum(t.sem, 2)}</dd>
+          <dd className="font-semibold text-stone-700">{fmtNum(tst.sem, 2)}</dd>
         </div>
         <div className="col-span-2 flex items-center justify-between border-t border-stone-100 pt-1.5">
-          <dt className="text-stone-500">Fidélité (alpha)</dt>
+          <dt className="text-stone-500">{t('Fidélité (alpha)')}</dt>
           <dd className="flex items-center gap-2">
-            <span className="font-bold text-stone-800">{fmt2(t.alpha)}</span>
-            {t.alpha !== null && (
+            <span className="font-bold text-stone-800">{fmt2(tst.alpha)}</span>
+            {tst.alpha !== null && (
               <span
                 className={cn(
                   'rounded-full px-2 py-0.5 text-[10px] font-bold',
-                  TONE_BG[alphaInterp(t.alpha).tone]
+                  TONE_BG[alphaInterp(tst.alpha).tone]
                 )}
               >
-                {alphaInterp(t.alpha).label}
+                {t(alphaInterp(tst.alpha).label)}
               </span>
             )}
           </dd>
@@ -301,13 +314,13 @@ function SynthesisCard({ kind, analysis }: { kind: SectionKind; analysis: Sectio
       </dl>
       <div className="mt-3 border-t border-stone-100 pt-2">
         <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-stone-400">
-          Répartition / 20
+          {t('Répartition / 20')}
         </p>
-        <DistributionBars dist={t.distribution} />
+        <DistributionBars dist={tst.distribution} />
       </div>
       {small && (
         <p className="mt-2 text-[10px] italic text-amber-600">
-          Effectif réduit : indices indicatifs.
+          {t('Effectif réduit : indices indicatifs.')}
         </p>
       )}
     </div>
@@ -323,53 +336,57 @@ function ItemsTable({
   kind: SectionKind
   analysis: SectionAnalysis
 }) {
+  const { t } = useI18n()
   const isTrat = kind === 'trat'
   const isApp = kind === 'application'
   const items = analysis.items
 
-  // Application : regroupement par cas clinique (sous-en-têtes)
-  let lastCase: string | null | undefined = null
+  // Libellés composés « Application 2 Q3 » → mot Application traduit
+  const fmtQLabel = (label: string): string =>
+    label
+      .replace(/^Application ex\.(\d+)$/, (_m, n) => `${t('Exercice')} ${n}`)
+      .replace(/^Application (\d+) Q(\d+)$/, (_m, a, q) => `${t('Application')} ${a} Q${q}`)
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[720px] text-sm">
         <thead>
-          <tr className="border-b border-stone-200 text-left text-[11px] text-stone-500">
-            <th className="py-2 pr-2 font-medium">Question</th>
-            <th className="py-2 pr-2 font-medium">Intitulé</th>
+          <tr className="border-b border-stone-200 text-start text-[11px] text-stone-500">
+            <th className="py-2 pe-2 font-medium">{t('Question')}</th>
+            <th className="py-2 pe-2 font-medium">{t('Intitulé')}</th>
             <th className="px-1.5 py-2 text-center font-medium">n</th>
             {isTrat ? (
               <>
-                <th className="px-1.5 py-2 text-center font-medium">1ᵉʳ essai</th>
-                <th className="px-1.5 py-2 text-center font-medium">Réussite finale</th>
-                <th className="px-1.5 py-2 text-center font-medium">Pts moyens /4</th>
+                <th className="px-1.5 py-2 text-center font-medium">{t('1ᵉʳ essai')}</th>
+                <th className="px-1.5 py-2 text-center font-medium">{t('Réussite finale')}</th>
+                <th className="px-1.5 py-2 text-center font-medium">{t('Pts moyens /4')}</th>
                 <th className="px-1.5 py-2 text-center font-medium">
-                  Répartition
+                  {t('Répartition')}
                   <span className="block font-normal">4 / 2 / 1 / 0</span>
                 </th>
               </>
             ) : (
               <th className="px-1.5 py-2 text-center font-medium">
-                Réussite
+                {t('Réussite')}
                 <span className="block font-normal">(p)</span>
               </th>
             )}
             <th className="px-1.5 py-2 text-center font-medium">
-              Discrimination
+              {t('Discrimination')}
               <span className="block font-normal">(D)</span>
             </th>
-            <th className="px-1.5 py-2 text-center font-medium">
-              r pbs
-            </th>
-            <th className="py-2 pl-2 text-center font-medium">
-              {isTrat ? 'Choix initial' : 'Choix'}
+            <th className="px-1.5 py-2 text-center font-medium">r pbs</th>
+            <th className="py-2 ps-2 text-center font-medium">
+              {isTrat ? t('Choix initial') : t('Choix')}
             </th>
           </tr>
         </thead>
         <tbody>
-          {items.map((it) => {
-            const caseChanged = isApp && it.question.caseLabel !== lastCase
-            if (isApp) lastCase = it.question.caseLabel
+          {items.map((it, idx) => {
+            // Application : regroupement par cas clinique (sous-en-têtes)
+            const caseChanged =
+              isApp &&
+              (idx === 0 || items[idx - 1].question.caseLabel !== it.question.caseLabel)
             return (
               <Fragment key={it.question.id}>
                 {caseChanged && (
@@ -378,13 +395,13 @@ function ItemsTable({
                       colSpan={9}
                       className="border-b border-stone-100 bg-stone-50 px-2 py-1.5 text-[11px] font-bold text-stone-600"
                     >
-                      {it.question.caseLabel ?? 'Exercices d\u2019application'}
+                      {fmtQLabel(it.question.caseLabel ?? 'Exercices d’application')}
                     </td>
                   </tr>
                 )}
                 <tr className="border-b border-stone-100">
-                  <td className="py-2 pr-2 whitespace-nowrap text-xs font-semibold text-stone-700">
-                    {it.question.label}
+                  <td className="py-2 pe-2 whitespace-nowrap text-xs font-semibold text-stone-700">
+                    {fmtQLabel(it.question.label)}
                   </td>
                   <td className="max-w-[220px] py-2 pr-2 text-xs text-stone-500" title={it.question.text}>
                     {it.question.text.length > 60
@@ -448,21 +465,22 @@ function ComparisonSection({
   trat: SectionAnalysis
   comparison: ComparisonRow[]
 }) {
+  const { t } = useI18n()
   const gain20 =
     irat.test.mean20 !== null && trat.test.mean20 !== null
       ? trat.test.mean20 - irat.test.mean20
       : null
   return (
-    <Section title="Effet équipe : iRAT → tRAT">
+    <Section title={t('Effet équipe : iRAT → tRAT')}>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] text-sm">
           <thead>
-            <tr className="border-b border-stone-200 text-left text-[11px] text-stone-500">
-              <th className="py-2 pr-2 font-medium">Question</th>
-              <th className="px-1.5 py-2 text-center font-medium">Réussite individus</th>
-              <th className="px-1.5 py-2 text-center font-medium">Équipes 1ᵉʳ essai</th>
-              <th className="px-1.5 py-2 text-center font-medium">Équipes au final</th>
-              <th className="px-1.5 py-2 text-center font-medium">Gain équipe</th>
+            <tr className="border-b border-stone-200 text-start text-[11px] text-stone-500">
+              <th className="py-2 pe-2 font-medium">{t('Question')}</th>
+              <th className="px-1.5 py-2 text-center font-medium">{t('Réussite individus')}</th>
+              <th className="px-1.5 py-2 text-center font-medium">{t('Équipes 1ᵉʳ essai')}</th>
+              <th className="px-1.5 py-2 text-center font-medium">{t('Équipes au final')}</th>
+              <th className="px-1.5 py-2 text-center font-medium">{t('Gain équipe')}</th>
             </tr>
           </thead>
           <tbody>
@@ -504,7 +522,7 @@ function ComparisonSection({
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-stone-200 text-xs">
-              <td className="py-2 pr-2 font-bold text-stone-700">Moyenne / 20</td>
+              <td className="py-2 pe-2 font-bold text-stone-700">{t('Moyenne / 20')}</td>
               <td className="px-1.5 py-2 text-center font-bold text-stone-700">
                 {fmtNum(irat.test.mean20)}
               </td>
@@ -526,10 +544,9 @@ function ComparisonSection({
         </table>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-stone-500">
-        Le gain mesure l&apos;effet du travail en équipe : différence entre la réussite finale des
-        équipes (tRAT, après grattage) et la réussite individuelle (iRAT). Un gain positif — le cas
-        le plus fréquent — traduit l&apos;apprentissage par la discussion ; les questions à gain
-        nul ou négatif méritent une explication en feedback.
+        {t(
+          'Le gain mesure l’effet du travail en équipe : différence entre la réussite finale des équipes (tRAT, après grattage) et la réussite individuelle (iRAT). Un gain positif — le cas le plus fréquent — traduit l’apprentissage par la discussion ; les questions à gain nul ou négatif méritent une explication en feedback.'
+        )}
       </p>
     </Section>
   )
@@ -544,16 +561,19 @@ const KIND_LABEL: Record<SectionKind, string> = {
 }
 
 function FlaggedSection({ flagged }: { flagged: FlaggedQuestion[] }) {
+  const { t } = useI18n()
   if (flagged.length === 0) {
     return (
       <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700">
         <CheckCircle2 className="h-5 w-5 shrink-0" />
-        Aucune question à signaler : tous les indices se situent dans les plages recommandées.
+        {t(
+          'Aucune question à signaler : tous les indices se situent dans les plages recommandées.'
+        )}
       </div>
     )
   }
   return (
-    <Section title={`Questions à revoir (${flagged.length})`}>
+    <Section title={t('Questions à revoir ({n})', { n: flagged.length })}>
       <div className="space-y-2">
         {flagged.map((f) => (
           <div
@@ -562,7 +582,7 @@ function FlaggedSection({ flagged }: { flagged: FlaggedQuestion[] }) {
           >
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                {KIND_LABEL[f.kind]}
+                {t(KIND_LABEL[f.kind])}
               </span>
               <span className="text-xs font-bold text-stone-700">{f.label}</span>
               <span className="text-xs text-stone-500" title={f.text}>
@@ -581,9 +601,9 @@ function FlaggedSection({ flagged }: { flagged: FlaggedQuestion[] }) {
         ))}
       </div>
       <p className="mt-3 text-xs text-stone-500">
-        Signalement automatique : question très difficile (p &lt; 0,25) ou très facile (p &gt;
-        0,95), discrimination D &lt; 0,20, corrélation au reste du test &lt; 0,20, ou distracteur
-        jamais choisi.
+        {t(
+          'Signalement automatique : question très difficile (p < 0,25) ou très facile (p > 0,95), discrimination D < 0,20, corrélation au reste du test < 0,20, ou distracteur jamais choisi.'
+        )}
       </p>
     </Section>
   )
@@ -625,13 +645,14 @@ export function StatsTab({
   }, [data, ratQs, appQs])
 
   const { irat, trat, app, comparison, flagged } = analyses
+  const { t } = useI18n()
 
   if (!irat && !trat && !app) {
     return (
       <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
-        Les statistiques docimologiques apparaîtront ici dès que les étudiants auront commencé à
-        répondre (iRAT, tRAT ou cas cliniques). Elles se calculent automatiquement et s&apos;affinent
-        au fil des réponses.
+        {t(
+          'Les statistiques docimologiques apparaîtront ici dès que les étudiants auront commencé à répondre (iRAT, tRAT ou cas cliniques). Elles se calculent automatiquement et s’affinent au fil des réponses.'
+        )}
       </p>
     )
   }
@@ -642,8 +663,9 @@ export function StatsTab({
     <div className="space-y-5">
       {!finished && (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
-          Séance en cours : statistiques provisoires (recalculées en direct). Exportez-les plutôt
-          une fois la séance terminée.
+          {t(
+            'Séance en cours : statistiques provisoires (recalculées en direct). Exportez-les plutôt une fois la séance terminée.'
+          )}
         </p>
       )}
 
@@ -663,17 +685,23 @@ export function StatsTab({
 
       {/* Analyse des questions */}
       {irat && (
-        <Section title="Analyse des questions — iRAT (répondants : étudiants)">
+        <Section title={t('Analyse des questions — iRAT (répondants : étudiants)')}>
           <ItemsTable kind="irat" analysis={irat} />
         </Section>
       )}
       {trat && (
-        <Section title="Analyse des questions — tRAT (répondants : équipes · choix = 1ᵉʳ essai · barème IF-AT 4/2/1/0)">
+        <Section
+          title={t(
+            'Analyse des questions — tRAT (répondants : équipes · choix = 1ᵉʳ essai · barème IF-AT 4/2/1/0)'
+          )}
+        >
           <ItemsTable kind="trat" analysis={trat} />
         </Section>
       )}
       {app && (
-        <Section title="Analyse des questions — application et cas cliniques (répondants : équipes)">
+        <Section
+          title={t('Analyse des questions — application et cas cliniques (répondants : équipes)')}
+        >
           <ItemsTable kind="application" analysis={app} />
         </Section>
       )}
@@ -688,7 +716,7 @@ export function StatsTab({
         onClick={() => exportDocimologyCsv(data, irat, trat, app, comparison, flagged)}
       >
         <Download className="mr-2 h-4 w-4" />
-        Exporter l&apos;analyse docimologique complète (CSV pour Excel)
+        {t('Exporter l’analyse docimologique complète (CSV pour Excel)')}
       </Button>
     </div>
   )
@@ -723,130 +751,146 @@ export function exportDocimologyCsv(
   const line = (...cells: (string | number | null | undefined)[]) =>
     rows.push(cells.map(esc).join(';'))
 
+  // Libellés composés « Application 2 Q3 » → mot Application traduit
+  const fmtQLabel = (label: string): string =>
+    label
+      .replace(/^Application ex\.(\d+)$/, (_m, n) => `${t('Exercice')} ${n}`)
+      .replace(/^Application (\d+) Q(\d+)$/, (_m, a, q) => `${t('Application')} ${a} Q${q}`)
+
   line(`STATISTIQUES DOCIMOLOGIQUES — ${data.session.title} (code ${data.session.code})`)
   line(
-    `Exporté le ${new Date().toLocaleString('fr-FR')} — phase : ${data.session.status} — ${data.students.length} étudiant(s), ${data.teams.length} équipe(s)`
+    t('Exporté le {date} — phase : {phase} — {n} étudiant(s), {m} équipe(s)', {
+      date: formatDate(new Date(), {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }),
+      phase: data.session.status,
+      n: data.students.length,
+      m: data.teams.length,
+    })
   )
   rows.push('')
 
   // ---- 1. Synthèse par section ----
-  line('1. SYNTHÈSE PAR SECTION')
   line(
-    'Section',
-    'Répondants',
-    'Questions',
-    'Score max',
-    'Moyenne (points)',
-    'Écart-type',
-    'Moyenne /20',
-    'Médiane (points)',
+    t('1. SYNTHÈSE PAR SECTION')
+  )
+  line(
+    t('Section'),
+    t('Répondants'),
+    t('Questions'),
+    t('Score max'),
+    t('Moyenne (points)'),
+    t('Écart-type'),
+    t('Moyenne /20'),
+    t('Médiane (points)'),
     'Q1',
     'Q3',
     'Min',
     'Max',
-    'Fidélité (alpha)',
-    'Interprétation fidélité',
-    'SEM (points)',
-    'Répondants complets'
+    t('Fidélité (alpha)'),
+    t('Interprétation fidélité'),
+    t('SEM (points)'),
+    t('Répondants complets')
   )
   const sections: [string, SectionAnalysis | null][] = [
-    ['iRAT (individuel)', irat],
-    ['tRAT (équipes)', trat],
-    ['Application (équipes)', app],
+    [t('iRAT (individuel)'), irat],
+    [t('tRAT (équipes)'), trat],
+    [t('Application (équipes)'), app],
   ]
   for (const [label, a] of sections) {
     if (!a) continue
-    const t = a.test
+    const tst = a.test
     line(
       label,
-      t.n,
-      t.k,
-      t.maxScore,
-      nb(t.mean),
-      nb(t.sd),
-      nb(t.mean20, 1),
-      nb(t.median),
-      nb(t.q1),
-      nb(t.q3),
-      t.min,
-      t.max,
-      nb(t.alpha),
-      t.alpha !== null ? alphaInterp(t.alpha).label : '',
-      nb(t.sem),
-      t.nComplete
+      tst.n,
+      tst.k,
+      tst.maxScore,
+      nb(tst.mean),
+      nb(tst.sd),
+      nb(tst.mean20, 1),
+      nb(tst.median),
+      nb(tst.q1),
+      nb(tst.q3),
+      tst.min,
+      tst.max,
+      nb(tst.alpha),
+      tst.alpha !== null ? t(alphaInterp(tst.alpha).label) : '',
+      nb(tst.sem),
+      tst.nComplete
     )
   }
   rows.push('')
 
   // ---- 2. Analyse des questions ----
   const itemRows = (kindLabel: string, a: SectionAnalysis, isTrat: boolean, isApp: boolean) => {
-    line(`2. ANALYSE DES QUESTIONS — ${kindLabel}`)
+    line(`2. ${t('ANALYSE DES QUESTIONS')} — ${kindLabel}`)
     const header = isTrat
       ? [
-          'Question', 'Intitulé', 'Équipes', 'Réussite 1er essai (%)', 'Réussite finale (%)',
-          'Points moyens (sur 4)', 'Équipes à 4 pts', 'à 2 pts', 'à 1 pt', 'à 0 pt',
-          'Indice de discrimination (D)', 'Interprétation D', 'r point-bisériale',
+          t('Question'), t('Intitulé'), t('Équipes'), t('Réussite 1er essai (%)'), t('Réussite finale (%)'),
+          t('Points moyens (sur 4)'), t('Équipes à 4 pts'), t('à 2 pts'), t('à 1 pt'), t('à 0 pt'),
+          t('Indice de discrimination (D)'), t('Interprétation D'), t('r point-bisériale'),
         ]
       : [
-          ...(isApp ? ['Cas'] : []), 'Question', 'Intitulé', 'Répondants',
-          ...(isApp ? ['Bonnes réponses'] : []), 'Indice de difficulté (p)',
-          'Interprétation difficulté', 'Indice de discrimination (D)', 'Interprétation D',
-          'r point-bisériale',
+          ...(isApp ? [t('Cas')] : []), t('Question'), t('Intitulé'), t('Répondants'),
+          ...(isApp ? [t('Bonnes réponses')] : []), t('Indice de difficulté (p)'),
+          t('Interprétation difficulté'), t('Indice de discrimination (D)'), t('Interprétation D'),
+          t('r point-bisériale'),
         ]
-    const optHeader = LETTERS.map((l) => `Choix ${l} (%)`)
-    line(...header, ...optHeader, ...(isTrat ? [] : ['Sans réponse']))
+    const optHeader = LETTERS.map((l) => `${t('Choix')} ${l} (%)`)
+    line(...header, ...optHeader, ...(isTrat ? [] : [t('Sans réponse')]))
     for (const it of a.items) {
       const optByIndex = new Map(it.options.map((o) => [o.index, o]))
       const optCells = Array.from({ length: 6 }, (_, i) => pc(optByIndex.get(i)?.pct ?? null))
       const base = isApp
-        ? [it.question.caseLabel ?? '', it.question.label, it.question.text, it.n, it.nCorrect]
+        ? [fmtQLabel(it.question.caseLabel ?? ''), fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
         : isTrat
-          ? [it.question.label, it.question.text, it.n]
-          : [it.question.label, it.question.text, it.n, it.nCorrect]
+          ? [fmtQLabel(it.question.label), it.question.text, it.n]
+          : [fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
       const stats = isTrat
         ? [
             pc(it.pFirst), pc(it.p), nb(it.avgScore),
             it.ifat?.c4 ?? '', it.ifat?.c2 ?? '', it.ifat?.c1 ?? '', it.ifat?.c0 ?? '',
             nb(it.d),
-            it.d !== null ? discriminationInterp(it.d).label : '',
+            it.d !== null ? t(discriminationInterp(it.d).label) : '',
             nb(it.rpbs),
           ]
         : [
             pc(it.p),
-            it.p !== null ? difficultyInterp(it.p).label : '',
+            it.p !== null ? t(difficultyInterp(it.p).label) : '',
             nb(it.d),
-            it.d !== null ? discriminationInterp(it.d).label : '',
+            it.d !== null ? t(discriminationInterp(it.d).label) : '',
             nb(it.rpbs),
           ]
       line(...base, ...stats, ...optCells, ...(isTrat ? [] : [it.nMissing]))
     }
     rows.push('')
   }
-  if (irat) itemRows('iRAT (répondants : étudiants)', irat, false, false)
+  if (irat) itemRows(t('iRAT (répondants : étudiants)'), irat, false, false)
   if (trat)
     itemRows(
-      'tRAT (répondants : équipes — choix du 1ᵉʳ essai — barème IF-AT 4/2/1/0)',
+      t('tRAT (répondants : équipes — choix du 1ᵉʳ essai — barème IF-AT 4/2/1/0)'),
       trat,
       true,
       false
     )
   if (app)
-    itemRows('APPLICATION ET CAS CLINIQUES (répondants : équipes)', app, false, true)
+    itemRows(t('APPLICATION ET CAS CLINIQUES (répondants : équipes)'), app, false, true)
 
   // ---- 3. Comparaison iRAT → tRAT ----
   if (comparison && irat && trat) {
-    line('3. COMPARAISON iRAT → tRAT (effet équipe)')
+    line(`3. ${t('COMPARAISON iRAT → tRAT (effet équipe)')}`)
     line(
-      'Question',
-      'Intitulé',
-      'Réussite individus (%)',
-      'Équipes 1er essai (%)',
-      'Équipes au final (%)',
-      'Gain (points de %)'
+      t('Question'),
+      t('Intitulé'),
+      t('Réussite individus (%)'),
+      t('Équipes 1er essai (%)'),
+      t('Équipes au final (%)'),
+      t('Gain (points de %)')
     )
     for (const row of comparison) {
       line(
-        row.question.label,
+        fmtQLabel(row.question.label),
         row.question.text,
         pc(row.pIrat),
         pc(row.pTratFirst),
@@ -855,7 +899,7 @@ export function exportDocimologyCsv(
       )
     }
     line(
-      'Moyenne /20',
+      t('Moyenne /20'),
       '',
       nb(irat.test.mean20, 1),
       '',
@@ -868,8 +912,8 @@ export function exportDocimologyCsv(
   }
 
   // ---- 4. Distribution des notes ----
-  line('4. RÉPARTITION DES NOTES (sur 20)')
-  line('Section', 'Classe', 'Effectif')
+  line(`4. ${t('RÉPARTITION DES NOTES (sur 20)')}`)
+  line(t('Section'), t('Classe'), t('Effectif'))
   for (const [label, a] of sections) {
     if (!a) continue
     for (const bin of a.test.distribution) {
@@ -879,10 +923,10 @@ export function exportDocimologyCsv(
   rows.push('')
 
   // ---- 5. Questions à revoir ----
-  line('5. QUESTIONS À REVOIR (signalement automatique)')
-  line('Section', 'Question', 'Intitulé', 'Points à surveiller')
+  line(`5. ${t('QUESTIONS À REVOIR (signalement automatique)')}`)
+  line(t('Section'), t('Question'), t('Intitulé'), t('Points à surveiller'))
   for (const f of flagged) {
-    line(KIND_LABEL[f.kind], f.label, f.text, f.problems.join(' ; '))
+    line(t(KIND_LABEL[f.kind]), f.label, f.text, f.problems.join(' ; '))
   }
 
   // BOM UTF-8 + séparateur « ; » (Excel francophone)

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { t, translateApiError } from '@/lib/i18n'
 
 export class ApiError extends Error {
   status: number
@@ -18,7 +19,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     })
   } catch {
-    throw new ApiError('Connexion impossible. Vérifiez votre réseau.', 0)
+    throw new ApiError(t('Connexion impossible. Vérifiez votre réseau.'), 0)
   }
   let data: unknown = null
   try {
@@ -29,7 +30,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const errObj = data as { error?: unknown } | null
     const message =
-      errObj && typeof errObj.error === 'string' ? errObj.error : 'Une erreur est survenue.'
+      errObj && typeof errObj.error === 'string'
+        ? translateApiError(errObj.error)
+        : t('Une erreur est survenue.')
     throw new ApiError(message, res.status)
   }
   return data as T

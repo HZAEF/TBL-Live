@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/tbl-client'
 import type { QuestionDTO, StudentStateDTO } from '@/lib/tbl-types'
+import { useI18n } from '@/lib/i18n'
 import { ChoiceButton, choiceLetter, Countdown, InfoCard } from './shared'
 import { useToast } from '@/hooks/use-toast'
 
@@ -30,6 +31,7 @@ export function IratQuiz({
   const [selected, setSelected] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const { t } = useI18n()
 
   const q = questions[Math.min(index, questions.length - 1)]
   const done = questions.length > 0 && questions.every((x) => answered.has(x.id))
@@ -40,7 +42,11 @@ export function IratQuiz({
   }, [q?.id])
 
   if (questions.length === 0) {
-    return <InfoCard title="Aucune question">Votre professeur n&apos;a pas encore ajouté de questions.</InfoCard>
+    return (
+      <InfoCard title={t('Aucune question')}>
+        {t('Votre professeur n’a pas encore ajouté de questions.')}
+      </InfoCard>
+    )
   }
 
   if (done) {
@@ -49,10 +55,12 @@ export function IratQuiz({
         <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white">
           <Check className="h-7 w-7" />
         </span>
-        <p className="mt-3 text-lg font-bold text-emerald-900">Réponses enregistrées !</p>
+        <p className="mt-3 text-lg font-bold text-emerald-900">{t('Réponses enregistrées !')}</p>
         <p className="mt-1 text-sm text-emerald-800">
-          Vous avez répondu aux {questions.length} questions. Attendez les instructions de votre
-          professeur.
+          {t(
+            'Vous avez répondu aux {n} questions. Attendez les instructions de votre professeur.',
+            { n: questions.length }
+          )}
         </p>
       </div>
     )
@@ -68,7 +76,7 @@ export function IratQuiz({
         body: JSON.stringify({ token, questionId: q.id, choice: selected }),
       })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Erreur inconnue.')
+      setError(e instanceof Error ? e.message : t('Erreur inconnue.'))
       return
     } finally {
       setSubmitting(false)
@@ -81,7 +89,7 @@ export function IratQuiz({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm">
-        <span className="font-semibold text-amber-900">Test individuel — répondez seul(e)</span>
+        <span className="font-semibold text-amber-900">{t('Test individuel — répondez seul(e)')}</span>
         <Countdown startedAt={data.session.phaseStartedAt} minutes={data.session.iratMinutes} />
       </div>
 
@@ -89,7 +97,7 @@ export function IratQuiz({
 
       <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
         <p className="text-xs font-bold uppercase tracking-wide text-stone-400">
-          Question {index + 1} sur {questions.length}
+          {t('Question {i} sur {n}', { i: index + 1, n: questions.length })}
         </p>
         <p className="mt-2 text-lg font-semibold leading-snug text-stone-900">{q.text}</p>
         <div className="mt-5 space-y-2.5">
@@ -110,11 +118,11 @@ export function IratQuiz({
           disabled={selected === null || submitting}
           onClick={submit}
         >
-          {submitting ? 'Envoi…' : 'Valider ma réponse'}
-          <ArrowRight className="ml-2 h-5 w-5" />
+          {submitting ? t('Envoi…') : t('Valider ma réponse')}
+          <ArrowRight className="ml-2 h-5 w-5 rtl:rotate-180" />
         </Button>
         <p className="mt-2 text-center text-xs text-stone-500">
-          Attention : une fois validée, la réponse ne peut plus être modifiée.
+          {t('Attention : une fois validée, la réponse ne peut plus être modifiée.')}
         </p>
       </div>
     </div>
@@ -142,6 +150,7 @@ export function TratQuiz({
   const [selected, setSelected] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<{ correct: boolean; score: number; attempt: number } | null>(null)
+  const { t } = useI18n()
 
   const q = questions[Math.min(index, questions.length - 1)]
   const attempts = useMemo(
@@ -159,13 +168,19 @@ export function TratQuiz({
 
   if (!team) {
     return (
-      <InfoCard tone="amber" title="Vous n'êtes pas dans une équipe">
-        Prévenez votre professeur : il peut vous affecter à une équipe depuis son tableau de bord.
+      <InfoCard tone="amber" title={t("Vous n’êtes pas dans une équipe")}>
+        {t(
+          'Prévenez votre professeur : il peut vous affecter à une équipe depuis son tableau de bord.'
+        )}
       </InfoCard>
     )
   }
   if (questions.length === 0) {
-    return <InfoCard title="Aucune question">Aucune question disponible pour le test.</InfoCard>
+    return (
+      <InfoCard title={t('Aucune question')}>
+        {t('Aucune question disponible pour le test.')}
+      </InfoCard>
+    )
   }
 
   const submit = async () => {
@@ -179,15 +194,18 @@ export function TratQuiz({
       setFeedback({ correct: res.isCorrect, score: res.score, attempt: res.attempt })
       if (res.isCorrect) {
         toast({
-          title: `Bonne réponse ! +${res.score} point${res.score > 1 ? 's' : ''}`,
-          description: res.attempt === 1 ? 'Trouvé du premier coup 🎉' : `Trouvé à la ${res.attempt}ᵉ tentative.`,
+          title: t('Bonne réponse ! +{n} point(s)', { n: res.score }),
+          description:
+            res.attempt === 1
+              ? t('Trouvé du premier coup 🎉')
+              : t('Trouvé à la {n}ᵉ tentative.', { n: res.attempt }),
         })
       }
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019envoyer',
-        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        title: t('Impossible d’envoyer'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
         variant: 'destructive',
       })
     } finally {
@@ -208,13 +226,15 @@ export function TratQuiz({
       <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4">
         <p className="flex items-center gap-2 font-bold text-emerald-900">
           <Users className="h-5 w-5" />
-          Test en équipe — {team.name}
+          {t('Test en équipe — {team}', { team: team.name })}
         </p>
         <p className="mt-1 text-sm text-emerald-800">
-          Membres : {data.teamMembers.map((m) => m.name).join(', ')}
+          {t('Membres : {names}', { names: data.teamMembers.map((m) => m.name).join(', ') })}
         </p>
         <p className="mt-1.5 text-sm font-semibold text-emerald-900">
-          Discutez ensemble avant de valider ! Score de l&apos;équipe : {teamScore} pts
+          {t('Discutez ensemble avant de valider ! Score de l’équipe : {n} pts', {
+            n: teamScore,
+          })}
         </p>
       </div>
 
@@ -222,7 +242,7 @@ export function TratQuiz({
 
       <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
         <p className="text-xs font-bold uppercase tracking-wide text-stone-400">
-          Question {index + 1} sur {questions.length}
+          {t('Question {i} sur {n}', { i: index + 1, n: questions.length })}
         </p>
         <p className="mt-2 text-lg font-semibold leading-snug text-stone-900">{q.text}</p>
 
@@ -255,22 +275,23 @@ export function TratQuiz({
 
         {feedback && !feedback.correct && (
           <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-            Ce n&apos;est pas la bonne réponse. Réessayez :{' '}
+            {t('Ce n’est pas la bonne réponse. Réessayez :')}{' '}
             {feedback.attempt < 4
-              ? `${TRAT_POINTS[feedback.attempt] ?? 0} point(s) encore en jeu.`
-              : 'tentatives épuisées.'}
+              ? t('{n} point(s) encore en jeu.', { n: TRAT_POINTS[feedback.attempt] ?? 0 })
+              : t('tentatives épuisées.')}
           </p>
         )}
         {feedback && feedback.correct && (
           <p className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">
             <Check className="mr-1.5 inline h-4 w-4" />
-            Bonne réponse ! +{feedback.score} point(s) pour l&apos;équipe
+            {t('Bonne réponse ! +{n} point(s) pour l’équipe', { n: feedback.score })}
           </p>
         )}
         {exhausted && (
           <p className="mt-4 rounded-xl border border-stone-300 bg-stone-100 px-4 py-3 text-sm text-stone-700">
-            Les 4 tentatives sont épuisées pour cette question (0 point). La bonne réponse sera
-            révélée à l&apos;étape suivante.
+            {t(
+              'Les 4 tentatives sont épuisées pour cette question (0 point). La bonne réponse sera révélée à l’étape suivante.'
+            )}
           </p>
         )}
 
@@ -280,7 +301,11 @@ export function TratQuiz({
             disabled={selected === null || submitting || exhausted}
             onClick={submit}
           >
-            {submitting ? 'Envoi…' : `Valider pour l'équipe (${TRAT_POINTS[attempts.length] ?? 0} pt en jeu)`}
+            {submitting
+              ? t('Envoi…')
+              : t('Valider pour l’équipe ({n} pt en jeu)', {
+                  n: TRAT_POINTS[attempts.length] ?? 0,
+                })}
           </Button>
         ) : (
           <Button
@@ -293,8 +318,8 @@ export function TratQuiz({
               setIndex(nextPending >= 0 ? nextPending : Math.min(index + 1, questions.length - 1))
             }}
           >
-            Question suivante
-            <ArrowRight className="ml-2 h-5 w-5" />
+            {t('Question suivante')}
+            <ArrowRight className="ml-2 h-5 w-5 rtl:rotate-180" />
           </Button>
         )}
       </div>
@@ -317,14 +342,15 @@ export function AppealView({
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [sendingDone, setSendingDone] = useState(false)
+  const { t } = useI18n()
   const appealByQuestion = new Map(data.myAppeals.map((a) => [a.questionId, a]))
   const myTeamDone = data.myTeamAppealsDone ?? false
   const progress = data.appealsProgress
 
   if (!data.me.team) {
     return (
-      <InfoCard tone="amber" title="Vous n'êtes pas dans une équipe">
-        Prévenez votre professeur.
+      <InfoCard tone="amber" title={t("Vous n’êtes pas dans une équipe")}>
+        {t('Prévenez votre professeur.')}
       </InfoCard>
     )
   }
@@ -333,8 +359,10 @@ export function AppealView({
     const text = (drafts[questionId] ?? '').trim()
     if (text.length < 10) {
       toast({
-        title: 'Justification trop courte',
-        description: 'Expliquez en au moins 10 caractères pourquoi votre réponse devrait être acceptée.',
+        title: t('Justification trop courte'),
+        description: t(
+          'Expliquez en au moins 10 caractères pourquoi votre réponse devrait être acceptée.'
+        ),
         variant: 'destructive',
       })
       return
@@ -345,12 +373,12 @@ export function AppealView({
         method: 'POST',
         body: JSON.stringify({ token, questionId, text }),
       })
-      toast({ title: 'Réclamation envoyée', description: 'Votre professeur va l\u2019examiner.' })
+      toast({ title: t('Réclamation envoyée'), description: t('Votre professeur va l’examiner.') })
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019envoyer',
-        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        title: t('Impossible d’envoyer'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
         variant: 'destructive',
       })
     } finally {
@@ -370,17 +398,20 @@ export function AppealView({
       )
       if (done) {
         toast({
-          title: res.advanced ? 'Toutes les équipes ont répondu !' : 'Réponse enregistrée',
+          title: res.advanced ? t('Toutes les équipes ont répondu !') : t('Réponse enregistrée'),
           description: res.advanced
-            ? 'La séance passe automatiquement à la phase de feedback.'
-            : `En attente des autres équipes (${res.doneCount}/${res.total}).`,
+            ? t('La séance passe automatiquement à la phase de feedback.')
+            : t('En attente des autres équipes ({d}/{n}).', {
+                d: res.doneCount,
+                n: res.total,
+              }),
         })
       }
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019envoyer',
-        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        title: t('Impossible d’envoyer'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
         variant: 'destructive',
       })
     } finally {
@@ -403,13 +434,17 @@ export function AppealView({
           <>
             <p className="text-sm font-bold text-amber-900">
               {data.myAppeals.length > 0
-                ? 'Vos réclamations sont envoyées'
-                : 'Aucune réclamation à formuler ?'}
+                ? t('Vos réclamations sont envoyées')
+                : t('Aucune réclamation à formuler ?')}
             </p>
             <p className="mt-1 text-sm leading-relaxed text-amber-800">
               {data.myAppeals.length > 0
-                ? 'Si votre équipe a terminé, confirmez ci-dessous. Vous pourrez encore annuler tant que les autres équipes travaillent.'
-                : 'Si votre équipe n\u2019a aucune contestation, cliquez sur le bouton : la séance passera au feedback dès que toutes les équipes auront répondu.'}
+                ? t(
+                    'Si votre équipe a terminé, confirmez ci-dessous. Vous pourrez encore annuler tant que les autres équipes travaillent.'
+                  )
+                : t(
+                    'Si votre équipe n’a aucune contestation, cliquez sur le bouton : la séance passera au feedback dès que toutes les équipes auront répondu.'
+                  )}
             </p>
             <Button
               className="mt-3 h-12 w-full bg-amber-600 text-base hover:bg-amber-700"
@@ -418,23 +453,26 @@ export function AppealView({
             >
               <Check className="mr-2 h-5 w-5" />
               {data.myAppeals.length > 0
-                ? 'Nous avons terminé nos réclamations'
-                : 'Nous n\u2019avons pas de réclamation'}
+                ? t('Nous avons terminé nos réclamations')
+                : t('Nous n’avons pas de réclamation')}
             </Button>
           </>
         ) : (
           <>
             <p className="flex items-center gap-2 text-sm font-bold text-emerald-900">
               <Check className="h-5 w-5" />
-              Votre équipe a répondu
+              {t('Votre équipe a répondu')}
               {data.myAppeals.length > 0
-                ? ` (${data.myAppeals.length} réclamation${data.myAppeals.length > 1 ? 's' : ''} envoyée${data.myAppeals.length > 1 ? 's' : ''})`
-                : ' (aucune réclamation)'}
+                ? t(' ({n} réclamation(s) envoyée(s))', { n: data.myAppeals.length })
+                : t(' (aucune réclamation)')}
             </p>
             <p className="mt-1 text-sm text-emerald-800">
               {progress && progress.total > progress.done
-                ? `En attente des autres équipes : ${progress.done}/${progress.total} ont répondu.`
-                : 'La phase va se terminer…'}
+                ? t('En attente des autres équipes : {d}/{n} ont répondu.', {
+                    d: progress.done,
+                    n: progress.total,
+                  })
+                : t('La phase va se terminer…')}
             </p>
             <button
               type="button"
@@ -442,20 +480,21 @@ export function AppealView({
               onClick={() => markDone(false)}
               disabled={sendingDone}
             >
-              Annuler — notre équipe veut (re)formuler une réclamation
+              {t('Annuler — notre équipe veut (re)formuler une réclamation')}
             </button>
           </>
         )}
         {progress && !myTeamDone && (
           <p className="mt-2 text-center text-xs font-medium text-amber-700">
-            {progress.done}/{progress.total} équipe(s) ont déjà répondu
+            {t('{d}/{n} équipe(s) ont déjà répondu', { d: progress.done, n: progress.total })}
           </p>
         )}
       </div>
 
-      <InfoCard tone="amber" title="Réclamations (appels)">
-        Si vous pensez qu&apos;une de vos réponses devrait être acceptée (question ambiguë, sources
-        contradictoires…), écrivez une justification claire. Votre professeur décidera.
+      <InfoCard tone="amber" title={t('Réclamations (appels)')}>
+        {t(
+          'Si vous pensez qu’une de vos réponses devrait être acceptée (question ambiguë, sources contradictoires…), écrivez une justification claire. Votre professeur décidera.'
+        )}
       </InfoCard>
       {data.questions.map((q, qi) => {
         const attempts = data.teamTratAnswers.filter((a) => a.questionId === q.id)
@@ -463,7 +502,9 @@ export function AppealView({
         const appeal = appealByQuestion.get(q.id)
         return (
           <div key={q.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
-            <p className="text-sm font-bold text-stone-500">Question {qi + 1}</p>
+            <p className="text-sm font-bold text-stone-500">
+              {t('Question {n}', { n: qi + 1 })}
+            </p>
             <p className="mt-1 font-semibold leading-snug text-stone-900">{q.text}</p>
             <div className="mt-3 space-y-1.5">
               {q.choices.map((c, ci) => (
@@ -479,10 +520,14 @@ export function AppealView({
             </div>
             <p className="mt-2 text-xs text-stone-500">
               {found
-                ? `Votre équipe a trouvé la bonne réponse (${attempts.length} tentative(s)).`
+                ? t('Votre équipe a trouvé la bonne réponse ({n} tentative(s)).', {
+                    n: attempts.length,
+                  })
                 : attempts.length > 0
-                  ? `Réponse(s) tentée(s) : ${attempts.map((a) => choiceLetter(a.choice)).join(', ')} — sans succès.`
-                  : 'Votre équipe n\u2019a pas répondu à cette question.'}
+                  ? t('Réponse(s) tentée(s) : {choices} — sans succès.', {
+                      choices: attempts.map((a) => choiceLetter(a.choice)).join(', '),
+                    })
+                  : t('Votre équipe n’a pas répondu à cette question.')}
             </p>
 
             {appeal && (
@@ -497,17 +542,19 @@ export function AppealView({
                 )}
               >
                 {appeal.status === 'accepted'
-                  ? 'Réclamation acceptée (+4 pts)'
+                  ? t('Réclamation acceptée (+4 pts)')
                   : appeal.status === 'rejected'
-                    ? 'Réclamation refusée'
-                    : 'Réclamation en attente'}
+                    ? t('Réclamation refusée')
+                    : t('Réclamation en attente')}
               </p>
             )}
 
             <Textarea
               value={drafts[q.id] ?? appeal?.text ?? ''}
               onChange={(e) => setDrafts({ ...drafts, [q.id]: e.target.value })}
-              placeholder="Votre justification : pourquoi cette réponse devrait-elle être acceptée ?"
+              placeholder={t(
+                'Votre justification : pourquoi cette réponse devrait-elle être acceptée ?'
+              )}
               rows={3}
               className="mt-3 resize-none text-[15px]"
             />
@@ -517,7 +564,7 @@ export function AppealView({
               onClick={() => submit(q.id)}
             >
               <Send className="mr-2 h-4 w-4" />
-              {appeal ? 'Mettre à jour la réclamation' : 'Envoyer la réclamation'}
+              {appeal ? t('Mettre à jour la réclamation') : t('Envoyer la réclamation')}
             </Button>
           </div>
         )
@@ -545,6 +592,7 @@ export function ApplicationView({
   token: string
 }) {
   const { toast } = useToast()
+  const { t } = useI18n()
   const questions = data.applicationQuestions
   const revealedIds = useMemo(
     () => new Set(data.revealedAppQuestionIds ?? []),
@@ -593,16 +641,17 @@ export function ApplicationView({
 
   if (!data.me.team) {
     return (
-      <InfoCard tone="amber" title="Vous n'êtes pas dans une équipe">
-        Prévenez votre professeur.
+      <InfoCard tone="amber" title={t("Vous n’êtes pas dans une équipe")}>
+        {t('Prévenez votre professeur.')}
       </InfoCard>
     )
   }
   if (groups.length === 0) {
     return (
-      <InfoCard title="Aucun cas clinique">
-        Votre professeur n&apos;a pas prévu d&apos;exercice d&apos;application pour cette séance.
-        Attendez la suite.
+      <InfoCard title={t('Aucun cas clinique')}>
+        {t(
+          'Votre professeur n’a pas prévu d’exercice d’application pour cette séance. Attendez la suite.'
+        )}
       </InfoCard>
     )
   }
@@ -632,15 +681,15 @@ export function ApplicationView({
       })
       if (res.revealedNow) {
         toast({
-          title: 'Toutes les équipes ont répondu !',
-          description: 'Les réponses à cette question sont maintenant révélées.',
+          title: t('Toutes les équipes ont répondu !'),
+          description: t('Les réponses à cette question sont maintenant révélées.'),
         })
       }
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019enregistrer',
-        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        title: t('Impossible d’enregistrer'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
         variant: 'destructive',
       })
       await refresh()
@@ -651,11 +700,14 @@ export function ApplicationView({
 
   return (
     <div className="space-y-4">
-      <InfoCard tone="emerald" title="Cas cliniques d'application">
-        Travaillez chaque cas en équipe et choisissez vos réponses : elles sont{' '}
-        <strong>enregistrées automatiquement</strong> dès que vous cliquez. Les réponses de chaque
-        question seront <strong>révélées automatiquement</strong> dès que toutes les équipes auront
-        répondu. Pour changer une réponse avant la révélation, utilisez « Mettre à jour ».
+      <InfoCard tone="emerald" title={t("Cas cliniques d'application")}>
+        {t('Travaillez chaque cas en équipe et choisissez vos réponses : elles sont')}{' '}
+        <strong>{t('enregistrées automatiquement')}</strong>
+        {t('dès que vous cliquez. Les réponses de chaque question seront')}{' '}
+        <strong>{t('révélées automatiquement')}</strong>
+        {t(
+          'dès que toutes les équipes auront répondu. Pour changer une réponse avant la révélation, utilisez « Mettre à jour ».'
+        )}
       </InfoCard>
 
       {/* Sélecteur de cas (un cas à la fois) */}
@@ -669,7 +721,7 @@ export function ApplicationView({
               <button
                 key={g.key}
                 onClick={() => setGroupIndex(i)}
-                aria-label={`Aller à l'application ${i + 1}`}
+                aria-label={t("Aller à l'application {n}", { n: i + 1 })}
                 className={cn(
                   'flex h-9 w-9 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
                   i === groupIndex
@@ -689,11 +741,15 @@ export function ApplicationView({
       {/* En-tête du cas courant */}
       <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-5">
         <p className="text-xs font-bold uppercase tracking-wide text-lime-700">
-          {groups.length > 1 ? `Application ${groupIndex + 1} sur ${groups.length}` : 'Application'}
-          {!groupDone && ' — en cours'}
-          {groupDone && ' — terminé'}
+          {groups.length > 1
+            ? t('Application {i} sur {n}', { i: groupIndex + 1, n: groups.length })
+            : t('Application')}
+          {!groupDone && t(' — en cours')}
+          {groupDone && t(' — terminé')}
         </p>
-        <p className="mt-1.5 text-lg font-bold leading-snug text-stone-900">{group.title}</p>
+        <p className="mt-1.5 text-lg font-bold leading-snug text-stone-900">
+          {group.key === 'libres' ? t('Exercices d’application') : group.title}
+        </p>
         {group.intro && (
           <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-stone-700">
             {group.intro}
@@ -745,8 +801,8 @@ export function ApplicationView({
             window.scrollTo({ top: 0 })
           }}
         >
-          <ChevronLeft className="mr-1 h-5 w-5" />
-          Précédent
+          <ChevronLeft className="mr-1 h-5 w-5 rtl:rotate-180" />
+          {t('Précédent')}
         </Button>
         {!isLastGroup ? (
           <Button
@@ -756,18 +812,18 @@ export function ApplicationView({
               window.scrollTo({ top: 0 })
             }}
           >
-            {groupDone ? 'Cas suivant' : 'Passer au cas suivant'}
-            <ChevronRight className="ml-2 h-5 w-5" />
+            {groupDone ? t('Cas suivant') : t('Passer au cas suivant')}
+            <ChevronRight className="ml-2 h-5 w-5 rtl:rotate-180" />
           </Button>
         ) : (
           <div className="flex flex-[2] items-center justify-center rounded-xl border-2 border-dashed border-stone-300 px-3 text-center text-sm text-stone-500">
             {allDone ? (
               <span className="font-semibold text-emerald-700">
                 <Check className="mr-1 inline h-4 w-4" />
-                Tous les cas sont traités — attendez votre professeur.
+                {t('Tous les cas sont traités — attendez votre professeur.')}
               </span>
             ) : (
-              'Dernier cas — attendez les autres équipes et votre professeur.'
+              t('Dernier cas — attendez les autres équipes et votre professeur.')
             )}
           </div>
         )}
@@ -810,10 +866,13 @@ function AppQuestionCard({
     mine !== undefined &&
     ((pendingChoice !== undefined && pendingChoice !== mine.choice) ||
       (textDraft !== undefined && textDraft !== (mine.text ?? '')))
+  const { t } = useI18n()
 
   return (
     <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
-      <p className="text-xs font-bold uppercase tracking-wide text-stone-400">Question {qi + 1}</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-stone-400">
+        {t('Question {n}', { n: qi + 1 })}
+      </p>
       <p className="mt-2 text-lg font-semibold leading-snug text-stone-900">{q.text}</p>
 
       <div className="mt-5 space-y-2.5">
@@ -842,7 +901,7 @@ function AppQuestionCard({
       {revealed ? (
         <div className="mt-5 rounded-xl border-2 border-amber-300 bg-amber-50 p-4">
           <p className="mb-2 text-sm font-bold text-amber-900">
-            Réponses de toutes les équipes :
+            {t('Réponses de toutes les équipes :')}
           </p>
           <div className="space-y-1.5">
             {allTeamAppAnswers
@@ -858,7 +917,9 @@ function AppQuestionCard({
                   <span className="text-stone-700">
                     {a.teamName}
                     {a.teamName === teamName && (
-                      <span className="ml-1 text-xs font-bold text-emerald-600">(vous)</span>
+                      <span className="ml-1 text-xs font-bold text-emerald-600">
+                        {t('(vous)')}
+                      </span>
                     )}
                   </span>
                   <span
@@ -874,12 +935,15 @@ function AppQuestionCard({
                 </div>
               ))}
             {allTeamAppAnswers.filter((a) => a.questionId === q.id).length === 0 && (
-              <p className="text-sm text-stone-500">Aucune équipe n&apos;a répondu.</p>
+              <p className="text-sm text-stone-500">{t('Aucune équipe n’a répondu.')}</p>
             )}
           </div>
           {q.correct !== undefined && (
             <p className="mt-2 text-xs font-semibold text-amber-900">
-              Réponse attendue : {choiceLetter(q.correct)} — {q.choices[q.correct]}
+              {t('Réponse attendue : {l} — {c}', {
+                l: choiceLetter(q.correct),
+                c: q.choices[q.correct],
+              })}
             </p>
           )}
         </div>
@@ -888,21 +952,27 @@ function AppQuestionCard({
           {mine !== undefined && (
             <p className="mt-3 text-center text-xs font-medium text-emerald-700">
               <Check className="mr-1 inline h-3.5 w-3.5" />
-              Réponse enregistrée ({choiceLetter(mine.choice)})
+              {t('Réponse enregistrée ({l})', { l: choiceLetter(mine.choice) })}
               {progress && progress.total > 1
-                ? ` — en attente des autres équipes (${progress.answered}/${progress.total})`
+                ? t(' — en attente des autres équipes ({d}/{n})', {
+                    d: progress.answered,
+                    n: progress.total,
+                  })
                 : ''}
             </p>
           )}
           {mine === undefined && progress && progress.total > 1 && (
             <p className="mt-3 text-center text-xs text-stone-500">
-              {progress.answered}/{progress.total} équipe(s) ont répondu à cette question
+              {t('{d}/{n} équipe(s) ont répondu à cette question', {
+                d: progress.answered,
+                n: progress.total,
+              })}
             </p>
           )}
           <Textarea
             value={textDraft ?? mine?.text ?? ''}
             onChange={(e) => onTextChange(e.target.value)}
-            placeholder="Justification de votre équipe (facultatif mais recommandé)…"
+            placeholder={t('Justification de votre équipe (facultatif mais recommandé)…')}
             rows={2}
             className="mt-3 resize-none text-[15px]"
           />
@@ -912,22 +982,24 @@ function AppQuestionCard({
               disabled={saving || (mine === undefined && sel === undefined)}
               onClick={onUpdate}
             >
-              {saving ? 'Envoi…' : mine === undefined ? (
+              {saving ? t('Envoi…') : mine === undefined ? (
                 <>
                   <Send className="mr-2 h-4 w-4" />
-                  Envoyer la réponse de l&apos;équipe
+                  {t('Envoyer la réponse de l’équipe')}
                 </>
               ) : (
                 <>
                   <RotateCcw className="mr-2 h-4 w-4" />
-                  Mettre à jour la réponse de l&apos;équipe
+                  {t('Mettre à jour la réponse de l’équipe')}
                 </>
               )}
             </Button>
           )}
           {mine !== undefined && !dirty && pendingChoice === undefined && (
             <p className="mt-2 text-center text-xs text-stone-500">
-              Pour changer de réponse : choisissez une autre proposition puis « Mettre à jour ».
+              {t(
+                'Pour changer de réponse : choisissez une autre proposition puis « Mettre à jour ».'
+              )}
             </p>
           )}
         </>
@@ -948,6 +1020,7 @@ export function PeerView({
   token: string
 }) {
   const { toast } = useToast()
+  const { t } = useI18n()
   const teammates = data.teamMembers.filter((m) => m.id !== data.me.id)
   const [scores, setScores] = useState<Record<string, number>>({})
   const [comments, setComments] = useState<Record<string, string>>({})
@@ -973,9 +1046,10 @@ export function PeerView({
 
   if (teammates.length === 0) {
     return (
-      <InfoCard title="Pas de coéquipiers à évaluer">
-        Vous êtes seul(e) dans votre équipe, il n&apos;y a personne à évaluer. Attendez la fin de
-        cette étape.
+      <InfoCard title={t('Pas de coéquipiers à évaluer')}>
+        {t(
+          'Vous êtes seul(e) dans votre équipe, il n’y a personne à évaluer. Attendez la fin de cette étape.'
+        )}
       </InfoCard>
     )
   }
@@ -984,8 +1058,10 @@ export function PeerView({
     const missing = teammates.filter((m) => scores[m.id] === undefined)
     if (missing.length > 0) {
       toast({
-        title: 'Notes incomplètes',
-        description: `Attribuez une note à ${missing.map((m) => m.name).join(', ')}.`,
+        title: t('Notes incomplètes'),
+        description: t('Attribuez une note à {names}.', {
+          names: missing.map((m) => m.name).join(', '),
+        }),
         variant: 'destructive',
       })
       return
@@ -1004,12 +1080,12 @@ export function PeerView({
         }),
       })
       setSubmitted(true)
-      toast({ title: 'Évaluations envoyées', description: 'Merci pour votre honnêteté !' })
+      toast({ title: t('Évaluations envoyées'), description: t('Merci pour votre honnêteté !') })
       await refresh()
     } catch (e) {
       toast({
-        title: 'Impossible d\u2019envoyer',
-        description: e instanceof Error ? e.message : 'Erreur inconnue.',
+        title: t('Impossible d’envoyer'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
         variant: 'destructive',
       })
     } finally {
@@ -1019,10 +1095,10 @@ export function PeerView({
 
   return (
     <div className="space-y-4">
-      <InfoCard tone="emerald" title="Évaluation de vos coéquipiers">
-        Notez la contribution de chaque coéquipier pendant la séance (5 = excellente
-        contribution, 1 = très faible). Vos notes sont anonymes pour les autres étudiants ; votre
-        professeur voit les moyennes.
+      <InfoCard tone="emerald" title={t('Évaluation de vos coéquipiers')}>
+        {t(
+          'Notez la contribution de chaque coéquipier pendant la séance (5 = excellente contribution, 1 = très faible). Vos notes sont anonymes pour les autres étudiants ; votre professeur voit les moyennes.'
+        )}
       </InfoCard>
 
       {teammates.map((m) => (
@@ -1034,7 +1110,7 @@ export function PeerView({
                 key={n}
                 type="button"
                 onClick={() => setScores({ ...scores, [m.id]: n })}
-                aria-label={`Noter ${m.name} : ${n} sur 5`}
+                aria-label={t('Noter {name} : {n} sur 5', { name: m.name, n })}
                 className={cn(
                   'flex h-12 flex-1 flex-col items-center justify-center rounded-xl border-2 text-sm font-bold transition-all',
                   scores[m.id] === n
@@ -1052,7 +1128,7 @@ export function PeerView({
           <Textarea
             value={comments[m.id] ?? ''}
             onChange={(e) => setComments({ ...comments, [m.id]: e.target.value })}
-            placeholder="Commentaire (facultatif) : qu'a-t-il/elle apporté à l'équipe ?"
+            placeholder={t("Commentaire (facultatif) : qu'a-t-il/elle apporté à l'équipe ?")}
             rows={2}
             className="mt-3 resize-none text-sm"
           />
@@ -1064,12 +1140,16 @@ export function PeerView({
         disabled={submitting}
         onClick={submit}
       >
-        {submitting ? 'Envoi…' : submitted ? 'Mettre à jour mes évaluations' : 'Envoyer mes évaluations'}
+        {submitting
+          ? t('Envoi…')
+          : submitted
+            ? t('Mettre à jour mes évaluations')
+            : t('Envoyer mes évaluations')}
       </Button>
       {submitted && (
         <p className="text-center text-sm font-medium text-emerald-700">
           <Check className="mr-1 inline h-4 w-4" />
-          Évaluations enregistrées. Vous pouvez encore les ajuster.
+          {t('Évaluations enregistrées. Vous pouvez encore les ajuster.')}
         </p>
       )}
     </div>
@@ -1089,13 +1169,14 @@ function QuestionProgress({
   current: number
   onSelect: (i: number) => void
 }) {
+  const { t } = useI18n()
   return (
     <div className="flex flex-wrap gap-1.5">
       {questions.map((q, i) => (
         <button
           key={q.id}
           onClick={() => onSelect(i)}
-          aria-label={`Aller à la question ${i + 1}`}
+          aria-label={t('Aller à la question {n}', { n: i + 1 })}
           className={cn(
             'flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
             i === current

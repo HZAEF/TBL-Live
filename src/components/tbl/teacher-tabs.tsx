@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
+import { t, useI18n } from '@/lib/i18n'
 import type { DashboardDTO } from '@/lib/tbl-types'
 import { gradeForStudent, fmtNote } from '@/lib/grades'
 import { choiceLetter } from './shared'
@@ -28,6 +29,7 @@ type ManageFn = (action: string, extra?: Record<string, unknown>) => Promise<boo
 export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageFn }) {
   const [teamCount, setTeamCount] = useState(String(data.teams.length))
   const { toast } = useToast()
+  const { t } = useI18n()
   const unassigned = data.students.filter((s) => !s.teamId)
 
   return (
@@ -35,7 +37,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-stone-200 bg-white p-4">
         <div>
           <Label htmlFor="team-count" className="text-sm">
-            Nombre d&apos;équipes
+            {t('Nombre d’équipes')}
           </Label>
           <Input
             id="team-count"
@@ -46,7 +48,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
             onChange={(e) => setTeamCount(e.target.value)}
             className="mt-1 h-10 w-24"
           />
-          <p className="mt-1 text-xs text-stone-500">Entre 2 et 50.</p>
+          <p className="mt-1 text-xs text-stone-500">{t('Entre 2 et 50.')}</p>
         </div>
         <Button
           variant="outline"
@@ -57,7 +59,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
             })
           }
         >
-          Appliquer
+          {t('Appliquer')}
         </Button>
         <Button
           variant="outline"
@@ -65,26 +67,30 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
           onClick={async () => {
             if (
               window.confirm(
-                'Répartir automatiquement tous les étudiants sans équipe ? (À faire idéalement avant les tests)'
+                t(
+                  'Répartir automatiquement tous les étudiants sans équipe ? (À faire idéalement avant les tests)'
+                )
               )
             ) {
               const ok = await manage('auto_assign')
-              if (ok) toast({ title: 'Répartition effectuée' })
+              if (ok) toast({ title: t('Répartition effectuée') })
             }
           }}
         >
           <Wand2 className="mr-2 h-4 w-4" />
-          Répartir automatiquement {unassigned.length > 0 && `(${unassigned.length} sans équipe)`}
+          {t('Répartir automatiquement')}
+          {unassigned.length > 0 &&
+            ` (${t('{n} sans équipe', { n: unassigned.length })})`}
         </Button>
       </div>
 
       <div className="grid gap-3 lg:grid-cols-2">
-        {data.teams.map((t) => {
-          const members = data.students.filter((s) => s.teamId === t.id)
+        {data.teams.map((tm) => {
+          const members = data.students.filter((s) => s.teamId === tm.id)
           return (
-            <div key={t.id} className="rounded-2xl border border-stone-200 bg-white p-4">
+            <div key={tm.id} className="rounded-2xl border border-stone-200 bg-white p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <TeamNameEditor team={t} manage={manage} />
+                <TeamNameEditor team={tm} manage={manage} />
                 <span className="flex shrink-0 items-center gap-1 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600">
                   <Users className="h-3.5 w-3.5" />
                   {members.length}
@@ -92,7 +98,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
               </div>
               <div className="space-y-2">
                 {members.length === 0 && (
-                  <p className="text-sm text-stone-400">Aucun membre (pour l&apos;instant)</p>
+                  <p className="text-sm text-stone-400">{t('Aucun membre (pour l’instant)')}</p>
                 )}
                 {members.map((m) => (
                   <div
@@ -104,7 +110,9 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
                       {m.recoveryCode && (
                         <span
                           className="ml-2 font-mono text-[11px] font-normal text-stone-400"
-                          title="Code de reprise personnel de l’étudiant (à lui redonner s’il l’a perdu)"
+                          title={t(
+                            'Code de reprise personnel de l’étudiant (à lui redonner s’il l’a perdu)'
+                          )}
                         >
                           {m.recoveryCode}
                         </span>
@@ -124,7 +132,7 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="none">Sans équipe</SelectItem>
+                          <SelectItem value="none">{t('Sans équipe')}</SelectItem>
                           {data.teams.map((tt) => (
                             <SelectItem key={tt.id} value={tt.id}>
                               {tt.name}
@@ -139,13 +147,16 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
                         onClick={() => {
                           if (
                             window.confirm(
-                              `Retirer ${m.name} de la séance ? Ses réponses seront supprimées.`
+                              t(
+                                'Retirer {name} de la séance ? Ses réponses seront supprimées.',
+                                { name: m.name }
+                              )
                             )
                           ) {
                             manage('remove_student', { studentId: m.id })
                           }
                         }}
-                        aria-label={`Retirer ${m.name}`}
+                        aria-label={t('Retirer {name}', { name: m.name })}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -161,11 +172,13 @@ export function TeamsTab({ data, manage }: { data: DashboardDTO; manage: ManageF
       {unassigned.length > 0 && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-bold text-amber-900">
-            {unassigned.length} étudiant(s) sans équipe
+            {t('{n} étudiant(s) sans équipe', { n: unassigned.length })}
           </p>
           <p className="mt-1 text-sm text-amber-800">
-            {unassigned.map((s) => s.name).join(', ')} — utilisez le menu « Sans équipe » ci-dessus
-            ou la répartition automatique.
+            {unassigned.map((s) => s.name).join(', ')} —{' '}
+            {t(
+              'utilisez le menu « Sans équipe » ci-dessus ou la répartition automatique.'
+            )}
           </p>
         </div>
       )}
@@ -205,6 +218,7 @@ function TeamNameEditor({
 // ================= Onglet QUESTIONS =================
 
 export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: ManageFn }) {
+  const { t } = useI18n()
   const hasAnswers =
     data.iratAnswers.length > 0 || data.tratAnswers.length > 0 || data.appAnswers.length > 0
   const [newQ, setNewQ] = useState<DraftQuestion | null>(null)
@@ -217,16 +231,21 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
     <div className="space-y-4">
       {hasAnswers && (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Des réponses existent déjà ({data.iratAnswers.length} iRAT, {data.tratAnswers.length}{' '}
-          tRAT, {data.appAnswers.length} application). Modifier ou supprimer des questions peut
-          rendre les résultats incohérents — à éviter en cours de séance.
+          {t(
+            'Des réponses existent déjà ({a} iRAT, {b} tRAT, {c} application). Modifier ou supprimer des questions peut rendre les résultats incohérents — à éviter en cours de séance.',
+            {
+              a: data.iratAnswers.length,
+              b: data.tratAnswers.length,
+              c: data.appAnswers.length,
+            }
+          )}
         </p>
       )}
 
       <p className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-600">
-        Les questions sont réparties en deux listes indépendantes : les questions de préparation
-        (utilisées pour l&apos;iRAT <em>puis</em> le tRAT) et les cas cliniques d&apos;application
-        (affichés un par un aux équipes, avec révélation automatique des réponses).
+        {t(
+          'Les questions sont réparties en deux listes indépendantes : les questions de préparation (utilisées pour l’iRAT puis le tRAT) et les cas cliniques d’application (affichés un par un aux équipes, avec révélation automatique des réponses).'
+        )}
       </p>
 
       {/* --- Questions iRAT / tRAT --- */}
@@ -235,11 +254,13 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-white">
             iRAT / tRAT
           </span>
-          {ratQs.length} question{ratQs.length > 1 ? 's' : ''} de préparation
+          {t('{n} question(s) de préparation', { n: ratQs.length })}
         </h3>
         {ratQs.length === 0 && (
           <p className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 p-4 text-center text-sm text-stone-500">
-            Aucune question de préparation. Elles sont indispensables pour lancer l&apos;iRAT.
+            {t(
+              'Aucune question de préparation. Elles sont indispensables pour lancer l’iRAT.'
+            )}
           </p>
         )}
         {ratQs.map((q, i) => (
@@ -253,12 +274,16 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           <span className="rounded-full bg-lime-600 px-2.5 py-0.5 text-xs font-bold text-white">
             Application
           </span>
-          {data.cases.length} cas clinique{data.cases.length > 1 ? 's' : ''} · {appQs.filter((q) => q.caseId).length} QCU
+          {t('{n} cas clinique(s) · {m} QCU', {
+            n: data.cases.length,
+            m: appQs.filter((q) => q.caseId).length,
+          })}
         </h3>
         {data.cases.length === 0 && (
           <p className="rounded-2xl border border-dashed border-lime-300 bg-lime-50/50 p-4 text-center text-sm text-stone-500">
-            Aucun cas clinique pour le moment. Chaque cas contient un énoncé et 3 à 5 QCU,
-            affichés un par un aux équipes.
+            {t(
+              'Aucun cas clinique pour le moment. Chaque cas contient un énoncé et 3 à 5 QCU, affichés un par un aux équipes.'
+            )}
           </p>
         )}
         {data.cases.map((c, ci) => (
@@ -277,24 +302,26 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           disabled={data.cases.length >= 20}
           onClick={() => {
             if (
-              window.confirm(
-                'Ajouter un nouveau cas clinique (énoncé + QCU) ?'
-              )
+              window.confirm(t('Ajouter un nouveau cas clinique (énoncé + QCU) ?'))
             ) {
-              manage('add_case', { title: `Cas clinique ${data.cases.length + 1}`, intro: '' })
+              manage('add_case', {
+                title: t('Cas clinique {n}', { n: data.cases.length + 1 }),
+                intro: '',
+              })
             }
           }}
         >
           <Plus className="mr-2 h-4 w-4" />
-          Ajouter un cas clinique
+          {t('Ajouter un cas clinique')}
         </Button>
 
         {/* Ancien format : exercices libres */}
         {freeAppQs.length > 0 && (
           <div className="space-y-2 rounded-2xl border border-dashed border-stone-300 bg-stone-50/50 p-3">
             <p className="text-xs font-semibold text-stone-500">
-              Exercices d&apos;application isolés (ancien format — affichés ensemble sur une
-              seule page aux étudiants) :
+              {t(
+                'Exercices d’application isolés (ancien format — affichés ensemble sur une seule page aux étudiants) :'
+              )}
             </p>
             {freeAppQs.map((q, i) => (
               <ExistingQuestionEditor key={q.id} index={i} question={q} manage={manage} prefix="Exercice" />
@@ -327,7 +354,7 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
             }}
           >
             <Plus className="mr-2 h-4 w-4" />
-            Ajouter cette question
+            {t('Ajouter cette question')}
           </Button>
         </div>
       ) : (
@@ -340,7 +367,7 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           }}
         >
           <Plus className="mr-2 h-4 w-4" />
-          Question iRAT / tRAT
+          {t('Question iRAT / tRAT')}
         </Button>
       )}
     </div>
@@ -366,11 +393,14 @@ function CaseEditor({
   const [intro, setIntro] = useState(kase.intro ?? '')
   const [newQ, setNewQ] = useState<DraftQuestion | null>(null)
   const dirty = title !== kase.title || intro !== (kase.intro ?? '')
+  const { t } = useI18n()
 
   return (
     <div className="space-y-2 rounded-2xl border-2 border-lime-200 bg-lime-50/40 p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-bold text-stone-800">Application {index + 1}</p>
+        <p className="text-sm font-bold text-stone-800">
+          {t('Application {n}', { n: index + 1 })}
+        </p>
         <Button
           variant="ghost"
           size="icon"
@@ -378,13 +408,16 @@ function CaseEditor({
           onClick={() => {
             if (
               window.confirm(
-                `Supprimer « ${kase.title} » ? Ses ${questions.length} QCU et leurs réponses seront aussi supprimées.`
+                t(
+                  'Supprimer « {title} » ? Ses {n} QCU et leurs réponses seront aussi supprimées.',
+                  { title: kase.title, n: questions.length }
+                )
               )
             ) {
               manage('delete_case', { id: kase.id })
             }
           }}
-          aria-label={`Supprimer le cas ${index + 1}`}
+          aria-label={t('Supprimer le cas {n}', { n: index + 1 })}
         >
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -392,13 +425,13 @@ function CaseEditor({
       <Input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Titre du cas (ex. : Cas clinique — Mme A., 62 ans, douleur thoracique)"
+        placeholder={t('Titre du cas (ex. : Cas clinique — Mme A., 62 ans, douleur thoracique)')}
         className="h-10 border-lime-300"
       />
       <Textarea
         value={intro}
         onChange={(e) => setIntro(e.target.value)}
-        placeholder="Énoncé du cas : contexte, patient, données cliniques ou biologiques…"
+        placeholder={t('Énoncé du cas : contexte, patient, données cliniques ou biologiques…')}
         rows={3}
         className="resize-none border-lime-300 text-[15px]"
       />
@@ -409,7 +442,7 @@ function CaseEditor({
           onClick={() => manage('update_case', { id: kase.id, title, intro })}
         >
           <Save className="mr-1.5 h-4 w-4" />
-          Enregistrer le cas
+          {t('Enregistrer le cas')}
         </Button>
       )}
 
@@ -442,7 +475,7 @@ function CaseEditor({
             }}
           >
             <Plus className="mr-2 h-4 w-4" />
-            Ajouter cette QCU au cas
+            {t('Ajouter cette QCU au cas')}
           </Button>
         </div>
       ) : (
@@ -453,12 +486,12 @@ function CaseEditor({
           onClick={() => setNewQ(emptyQuestion('application'))}
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Ajouter une QCU à ce cas
+          {t('Ajouter une QCU à ce cas')}
         </Button>
       )}
       <p className="text-center text-xs text-stone-500">
-        {questions.length} QCU — 3 à 5 conseillées par cas
-        {hasAnswers && ' · des réponses existent déjà'}
+        {t('{n} QCU — 3 à 5 conseillées par cas', { n: questions.length })}
+        {hasAnswers && ` · ${t('des réponses existent déjà')}`}
       </p>
     </div>
   )
@@ -483,6 +516,7 @@ function ExistingQuestionEditor({
     correct: question.correct ?? 0,
     phase: question.phase,
   })
+  const { t } = useI18n()
   const dirty =
     draft.text !== question.text ||
     JSON.stringify(draft.choices) !== JSON.stringify(question.choices) ||
@@ -497,7 +531,11 @@ function ExistingQuestionEditor({
         hidePhaseToggle={hidePhaseToggle || question.caseId !== null}
         prefix={prefix ?? (question.phase === 'application' ? 'Exercice' : 'Question')}
         onDelete={() => {
-          if (window.confirm('Supprimer cette question ? Ses réponses seront aussi supprimées.')) {
+          if (
+            window.confirm(
+              t('Supprimer cette question ? Ses réponses seront aussi supprimées.')
+            )
+          ) {
             manage('delete_question', { id: question.id })
           }
         }}
@@ -509,7 +547,7 @@ function ExistingQuestionEditor({
           onClick={() => manage('update_question', { id: question.id, question: draft })}
         >
           <Save className="mr-1.5 h-4 w-4" />
-          Enregistrer les modifications
+          {t('Enregistrer les modifications')}
         </Button>
       )}
     </div>
@@ -527,10 +565,11 @@ export function ResultsTab({
   ratQs: DashboardDTO['questions']
   appQs: DashboardDTO['questions']
 }) {
+  const { t } = useI18n()
   if (data.students.length === 0) {
     return (
       <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
-        Les résultats apparaîtront ici dès que des étudiants auront répondu.
+        {t('Les résultats apparaîtront ici dès que des étudiants auront répondu.')}
       </p>
     )
   }
@@ -541,19 +580,19 @@ export function ResultsTab({
 
       {/* iRAT */}
       {ratQs.length > 0 && (
-        <ResultSection title="Test individuel (iRAT) — 1 point par bonne réponse">
+        <ResultSection title={t('Test individuel (iRAT) — 1 point par bonne réponse')}>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[480px] text-sm">
               <thead>
-                <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
-                  <th className="py-2 pr-3 font-medium">Étudiant</th>
-                  <th className="py-2 pr-3 font-medium">Équipe</th>
+                <tr className="border-b border-stone-200 text-start text-xs text-stone-500">
+                  <th className="py-2 pe-3 font-medium">{t('Étudiant')}</th>
+                  <th className="py-2 pe-3 font-medium">{t('Équipe')}</th>
                   {ratQs.map((_, i) => (
                     <th key={i} className="py-2 px-1.5 text-center font-medium">
                       Q{i + 1}
                     </th>
                   ))}
-                  <th className="py-2 pl-3 text-center font-medium">Total</th>
+                  <th className="py-2 ps-3 text-center font-medium">{t('Total')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -599,31 +638,33 @@ export function ResultsTab({
 
       {/* tRAT */}
       {ratQs.length > 0 && (
-        <ResultSection title="Test en équipe (tRAT) — barème 4 / 2 / 1 / 0 selon la tentative">
+        <ResultSection
+          title={t('Test en équipe (tRAT) — barème 4 / 2 / 1 / 0 selon la tentative')}
+        >
           <div className="overflow-x-auto">
             <table className="w-full min-w-[420px] text-sm">
               <thead>
-                <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
-                  <th className="py-2 pr-3 font-medium">Équipe</th>
+                <tr className="border-b border-stone-200 text-start text-xs text-stone-500">
+                  <th className="py-2 pe-3 font-medium">{t('Équipe')}</th>
                   {ratQs.map((_, i) => (
                     <th key={i} className="py-2 px-1.5 text-center font-medium">
                       Q{i + 1}
                     </th>
                   ))}
-                  <th className="py-2 pl-3 text-center font-medium">Total</th>
+                  <th className="py-2 ps-3 text-center font-medium">{t('Total')}</th>
                 </tr>
               </thead>
               <tbody>
-                {data.teams.map((t) => {
+                {data.teams.map((tm) => {
                   const total = data.tratAnswers
-                    .filter((a) => a.teamId === t.id)
+                    .filter((a) => a.teamId === tm.id)
                     .reduce((sum, a) => sum + a.score, 0)
                   return (
-                    <tr key={t.id} className="border-b border-stone-100">
-                      <td className="py-2 pr-3 font-medium text-stone-800">{t.name}</td>
+                    <tr key={tm.id} className="border-b border-stone-100">
+                      <td className="py-2 pe-3 font-medium text-stone-800">{tm.name}</td>
                       {ratQs.map((q) => {
                         const answers = data.tratAnswers.filter(
-                          (x) => x.questionId === q.id && x.teamId === t.id
+                          (x) => x.questionId === q.id && x.teamId === tm.id
                         )
                         const best = answers.find((a) => a.isCorrect)
                         const score = answers.reduce((sum, a) => sum + a.score, 0)
@@ -639,7 +680,7 @@ export function ResultsTab({
                               <span className="font-bold">{score > 0 ? score : '·'}</span>
                               {attempts > 0 && (
                                 <span className="text-[10px] text-stone-400">
-                                  {best ? `${attempts}ᵉ essai` : 'échoué'}
+                                  {best ? t('{n}ᵉ essai', { n: attempts }) : t('échoué')}
                                 </span>
                               )}
                             </span>
@@ -665,7 +706,9 @@ export function ResultsTab({
 
       {/* Évaluation par les pairs */}
       {data.peerEvals.length > 0 && (
-        <ResultSection title="Évaluation par les pairs — note moyenne reçue (sur 5)">
+        <ResultSection
+          title={t('Évaluation par les pairs — note moyenne reçue (sur 5)')}
+        >
           <div className="space-y-2">
             {data.students.map((s) => {
               const received = data.peerEvals.filter((e) => e.evaluatedId === s.id)
@@ -712,7 +755,7 @@ export function ResultsTab({
         onClick={() => exportCsv(data, ratQs, appQs)}
       >
         <Download className="mr-2 h-4 w-4" />
-        Exporter tous les résultats (CSV pour Excel)
+        {t('Exporter tous les résultats (CSV pour Excel)')}
       </Button>
     </div>
   )
@@ -726,25 +769,30 @@ function AppResultsByCase({
   data: DashboardDTO
   appQs: DashboardDTO['questions']
 }) {
+  const { t } = useI18n()
   const caseById = new Map(data.cases.map((c) => [c.id, c]))
   const groups: { label: string; questions: DashboardDTO['questions'] }[] = []
   for (const c of data.cases) {
     const qs = appQs.filter((q) => q.caseId === c.id)
-    if (qs.length > 0) groups.push({ label: `Application ${c.order + 1} — ${c.title}`, questions: qs })
+    if (qs.length > 0)
+      groups.push({
+        label: `${t('Application')} ${c.order + 1} — ${c.title}`,
+        questions: qs,
+      })
   }
   const free = appQs.filter((q) => !q.caseId || !caseById.has(q.caseId))
   if (free.length > 0) {
-    groups.push({ label: "Exercices d'application (ancien format)", questions: free })
+    groups.push({ label: t("Exercices d'application (ancien format)"), questions: free })
   }
   return (
     <>
       {groups.map((g) => (
-        <ResultSection key={g.label} title={`${g.label} — choix des équipes`}>
+        <ResultSection key={g.label} title={`${g.label} — ${t('choix des équipes')}`}>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[320px] text-sm">
               <thead>
-                <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
-                  <th className="py-2 pr-3 font-medium">Équipe</th>
+                <tr className="border-b border-stone-200 text-start text-xs text-stone-500">
+                  <th className="py-2 pe-3 font-medium">{t('Équipe')}</th>
                   {g.questions.map((_, i) => (
                     <th key={i} className="py-2 px-1.5 text-center font-medium">
                       Q{i + 1}
@@ -753,12 +801,12 @@ function AppResultsByCase({
                 </tr>
               </thead>
               <tbody>
-                {data.teams.map((t) => (
-                  <tr key={t.id} className="border-b border-stone-100">
-                    <td className="py-2 pr-3 font-medium text-stone-800">{t.name}</td>
+                {data.teams.map((tm) => (
+                  <tr key={tm.id} className="border-b border-stone-100">
+                    <td className="py-2 pe-3 font-medium text-stone-800">{tm.name}</td>
                     {g.questions.map((q) => {
                       const a = data.appAnswers.find(
-                        (x) => x.questionId === q.id && x.teamId === t.id
+                        (x) => x.questionId === q.id && x.teamId === tm.id
                       )
                       return (
                         <td key={q.id} className="py-2 px-1.5 text-center">
@@ -786,7 +834,9 @@ function AppResultsByCase({
             data.appAnswers.some((a) => a.questionId === q.id && a.text)
           ) && (
             <div className="mt-3 space-y-2">
-              <p className="text-xs font-semibold text-stone-500">Justifications des équipes :</p>
+              <p className="text-xs font-semibold text-stone-500">
+                {t('Justifications des équipes :')}
+              </p>
               {g.questions.map((q, qi) =>
                 data.appAnswers
                   .filter((a) => a.questionId === q.id && a.text)
@@ -825,18 +875,23 @@ function noteTone(note: number | null): string {
 }
 
 function FinalGradesSection({ data, finished }: { data: DashboardDTO; finished: boolean }) {
+  const { t } = useI18n()
   const grades = data.students.map((s) => ({ s, g: gradeForStudent(data, s.id) }))
   const anyGrade = grades.some(({ g }) => g.final !== null)
   if (!anyGrade) return null
 
   return (
-    <ResultSection title="Note finale sur 20 — iRAT 25 % · tRAT 25 % · Application 35 % · Pairs 15 %">
+    <ResultSection
+      title={t(
+        'Note finale sur 20 — iRAT 25 % · tRAT 25 % · Application 35 % · Pairs 15 %'
+      )}
+    >
       <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] text-sm">
           <thead>
-            <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
-              <th className="py-2 pr-3 font-medium">Étudiant</th>
-              <th className="py-2 pr-3 font-medium">Équipe</th>
+            <tr className="border-b border-stone-200 text-start text-xs text-stone-500">
+              <th className="py-2 pe-3 font-medium">{t('Étudiant')}</th>
+              <th className="py-2 pe-3 font-medium">{t('Équipe')}</th>
               <th className="py-2 px-1.5 text-center font-medium">
                 iRAT
                 <span className="block text-[10px] font-normal">25 %</span>
@@ -846,14 +901,14 @@ function FinalGradesSection({ data, finished }: { data: DashboardDTO; finished: 
                 <span className="block text-[10px] font-normal">25 %</span>
               </th>
               <th className="py-2 px-1.5 text-center font-medium">
-                Application
+                {t('Application')}
                 <span className="block text-[10px] font-normal">35 %</span>
               </th>
               <th className="py-2 px-1.5 text-center font-medium">
-                Pairs
+                {t('Pairs')}
                 <span className="block text-[10px] font-normal">15 %</span>
               </th>
-              <th className="py-2 pl-3 text-center font-medium">Note finale</th>
+              <th className="py-2 ps-3 text-center font-medium">{t('Note finale')}</th>
             </tr>
           </thead>
           <tbody>
@@ -886,14 +941,12 @@ function FinalGradesSection({ data, finished }: { data: DashboardDTO; finished: 
         </table>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-stone-500">
-        Chaque composante est d&apos;abord ramenée sur 20 (iRAT : 1 point par bonne réponse ; tRAT :
-        barème 4/2/1/0 ; application : réponses correctes de l&apos;équipe ; pairs : moyenne reçue
-        sur 5). Si une composante est indisponible — par exemple aucun exercice
-        d&apos;application ou aucune évaluation reçue — son poids est automatiquement redistribué
-        sur les autres (colonne « — »).{' '}
+        {t(
+          'Chaque composante est d’abord ramenée sur 20 (iRAT : 1 point par bonne réponse ; tRAT : barème 4/2/1/0 ; application : réponses correctes de l’équipe ; pairs : moyenne reçue sur 5). Si une composante est indisponible — par exemple aucun exercice d’application ou aucune évaluation reçue — son poids est automatiquement redistribué sur les autres (colonne « — »).'
+        )}{' '}
         {!finished && (
           <span className="font-medium text-amber-700">
-            Séance en cours : ces notes sont provisoires.
+            {t('Séance en cours : ces notes sont provisoires.')}
           </span>
         )}
       </p>
@@ -904,22 +957,25 @@ function FinalGradesSection({ data, finished }: { data: DashboardDTO; finished: 
 // ================= Onglet RÉCLAMATIONS =================
 
 export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: ManageFn }) {
+  const { t } = useI18n()
   // Les réclamations portent toujours sur les questions RAT (iRAT/tRAT) :
   // on numérote donc dans cette liste, pas dans la liste complète.
   const ratQs = data.questions.filter((q) => q.phase === 'rat')
   if (data.appeals.length === 0) {
     return (
       <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
-        Aucune réclamation pour le moment. Pendant la phase « Réclamations », les équipes peuvent
-        contester une réponse directement depuis leur téléphone.
+        {t(
+          'Aucune réclamation pour le moment. Pendant la phase « Réclamations », les équipes peuvent contester une réponse directement depuis leur téléphone.'
+        )}
       </p>
     )
   }
   return (
     <div className="space-y-3">
       <p className="text-xs text-stone-500">
-        Accepter une réclamation donne automatiquement les 4 points du tRAT à l&apos;équipe pour
-        cette question.
+        {t(
+          'Accepter une réclamation donne automatiquement les 4 points du tRAT à l’équipe pour cette question.'
+        )}
       </p>
       {data.appeals.map((a) => {
         const team = data.teams.find((t) => t.id === a.teamId)
@@ -929,10 +985,13 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
           <div key={a.id} className="rounded-2xl border border-stone-200 bg-white p-4">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
-                {team?.name ?? 'Équipe ?'}
+                {team?.name ?? t('Équipe ?')}
               </span>
               <span className="text-xs text-stone-500">
-                Question {qi} : {(question?.text ?? '').slice(0, 60)}
+                {t('Question {n} : {text}', {
+                  n: qi,
+                  text: (question?.text ?? '').slice(0, 60),
+                })}
                 {(question?.text ?? '').length > 60 ? '…' : ''}
               </span>
             </div>
@@ -947,7 +1006,7 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
                   onClick={() => manage('resolve_appeal', { id: a.id, status: 'accepted' })}
                 >
                   <Check className="mr-1.5 h-4 w-4" />
-                  Accepter (+4 pts)
+                  {t('Accepter (+4 pts)')}
                 </Button>
                 <Button
                   size="sm"
@@ -956,7 +1015,7 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
                   onClick={() => manage('resolve_appeal', { id: a.id, status: 'rejected' })}
                 >
                   <X className="mr-1.5 h-4 w-4" />
-                  Refuser
+                  {t('Refuser')}
                 </Button>
               </div>
             ) : (
@@ -970,11 +1029,11 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
               >
                 {a.status === 'accepted' ? (
                   <>
-                    <Check className="h-3.5 w-3.5" /> Acceptée (+4 pts)
+                    <Check className="h-3.5 w-3.5" /> {t('Acceptée (+4 pts)')}
                   </>
                 ) : (
                   <>
-                    <X className="h-3.5 w-3.5" /> Refusée
+                    <X className="h-3.5 w-3.5" /> {t('Refusée')}
                   </>
                 )}
               </p>
@@ -1012,9 +1071,30 @@ export function exportCsv(
   const caseById = new Map(data.cases.map((c) => [c.id, c]))
   const appColumnLabel = (q: DashboardDTO['questions'][number], i: number) => {
     const c = q.caseId ? caseById.get(q.caseId) : undefined
-    return c ? `Application ${c.order + 1} Q${appQs.filter((x) => x.caseId === q.caseId).indexOf(q) + 1}` : `Application ex.${i + 1}`
+    return c
+      ? `${t('Application')} ${c.order + 1} Q${
+          appQs.filter((x) => x.caseId === q.caseId).indexOf(q) + 1
+        }`
+      : `${t('Exercice')} ex.${i + 1}`
   }
-  rows.push(['Étudiant', 'Équipe', ...ratQs.map((_, i) => `iRAT Q${i + 1}`), 'iRAT total (sur ' + ratQs.length + ')', 'tRAT équipe (total sur ' + ratQs.length * 4 + ')', ...appQs.map((q, i) => appColumnLabel(q, i)), 'Note pairs (moyenne sur 5)', 'iRAT sur 20 (25%)', 'tRAT sur 20 (25%)', 'Application sur 20 (35%)', 'Pairs sur 20 (15%)', 'NOTE FINALE sur 20'].map(esc).join(';'))
+  rows.push(
+    [
+      t('Étudiant'),
+      t('Équipe'),
+      ...ratQs.map((_, i) => `iRAT Q${i + 1}`),
+      t('iRAT total (sur {n})', { n: ratQs.length }),
+      t('tRAT équipe (total sur {n})', { n: ratQs.length * 4 }),
+      ...appQs.map((q, i) => appColumnLabel(q, i)),
+      t('Note pairs (moyenne sur 5)'),
+      t('iRAT sur 20 (25%)'),
+      t('tRAT sur 20 (25%)'),
+      t('Application sur 20 (35%)'),
+      t('Pairs sur 20 (15%)'),
+      t('NOTE FINALE sur 20'),
+    ]
+      .map(esc)
+      .join(';')
+  )
   for (const s of data.students) {
     const team = data.teams.find((t) => t.id === s.teamId)
     const iratCells = ratQs.map((q) => {
@@ -1044,19 +1124,49 @@ export function exportCsv(
       c.note === null ? '' : c.note.toFixed(2).replace('.', ',')
     )
     const finalCell = g.final === null ? '' : g.final.toFixed(2).replace('.', ',')
-    rows.push([s.name, team?.name ?? '', ...iratCells, `${iratTotal} sur ${ratQs.length}`, `${tratTotal} sur ${ratQs.length * 4}`, ...appCells, peerAvg, ...cells, finalCell].map(esc).join(';'))
+    rows.push(
+      [
+        s.name,
+        team?.name ?? '',
+        ...iratCells,
+        t('{n} sur {m}', { n: iratTotal, m: ratQs.length }),
+        t('{n} sur {m}', { n: tratTotal, m: ratQs.length * 4 }),
+        ...appCells,
+        peerAvg,
+        ...cells,
+        finalCell,
+      ]
+        .map(esc)
+        .join(';')
+    )
   }
 
   rows.push('')
 
   // Tableau 2 : réclamations
   if (data.appeals.length > 0) {
-    rows.push(['Réclamations', 'Équipe', 'Question', 'Justification', 'Décision'].map(esc).join(';'))
+    rows.push(
+      [t('Réclamations'), t('Équipe'), t('Question'), t('Justification'), t('Décision')]
+        .map(esc)
+        .join(';')
+    )
     for (const a of data.appeals) {
-      const team = data.teams.find((t) => t.id === a.teamId)
+      const team = data.teams.find((tm) => tm.id === a.teamId)
       const q = data.questions.find((x) => x.id === a.questionId)
       rows.push(
-        ['', team?.name ?? '', q?.text ?? '', a.text, a.status === 'accepted' ? 'Acceptée' : a.status === 'rejected' ? 'Refusée' : 'En attente'].map(esc).join(';')
+        [
+          '',
+          team?.name ?? '',
+          q?.text ?? '',
+          a.text,
+          a.status === 'accepted'
+            ? t('Acceptée')
+            : a.status === 'rejected'
+              ? t('Refusée')
+              : t('En attente'),
+        ]
+          .map(esc)
+          .join(';')
       )
     }
     rows.push('')
@@ -1065,10 +1175,28 @@ export function exportCsv(
   // Tableau 3 : commentaires des pairs
   const withComments = data.peerEvals.filter((e) => e.comment)
   if (withComments.length > 0) {
-    rows.push(['Évaluation par les pairs', 'Évaluateur', 'Évalué', 'Note', 'Commentaire'].map(esc).join(';'))
+    rows.push(
+      [
+        t('Évaluation par les pairs'),
+        t('Évaluateur'),
+        t('Évalué'),
+        t('Note'),
+        t('Commentaire'),
+      ]
+        .map(esc)
+        .join(';')
+    )
     for (const e of withComments) {
       rows.push(
-        ['', data.students.find((s) => s.id === e.evaluatorId)?.name ?? '', data.students.find((s) => s.id === e.evaluatedId)?.name ?? '', String(e.score), e.comment ?? ''].map(esc).join(';')
+        [
+          '',
+          data.students.find((s) => s.id === e.evaluatorId)?.name ?? '',
+          data.students.find((s) => s.id === e.evaluatedId)?.name ?? '',
+          String(e.score),
+          e.comment ?? '',
+        ]
+          .map(esc)
+          .join(';')
       )
     }
   }

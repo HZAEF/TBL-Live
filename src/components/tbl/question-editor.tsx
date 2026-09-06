@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { LETTERS, type DraftCase, type DraftQuestion, type QuestionPhase } from '@/lib/tbl-types'
+import { useI18n } from '@/lib/i18n'
 
 export function emptyQuestion(phase: QuestionPhase = 'rat'): DraftQuestion {
   return { text: '', choices: ['', '', '', ''], correct: 0, phase }
@@ -53,6 +54,7 @@ export function QuestionEditor({
 
   const err = (field: string) => errors?.find((e) => e.startsWith(field))
   const hasErrors = (errors && errors.length > 0) || false
+  const { t } = useI18n()
 
   return (
     <div
@@ -63,7 +65,7 @@ export function QuestionEditor({
     >
       <div className="mb-3 flex items-center justify-between gap-2">
         <p className="text-sm font-bold text-stone-800">
-          {prefix} {index + 1}
+          {t(prefix)} {index + 1}
         </p>
         <div className="flex items-center gap-2">
           {!hidePhaseToggle && (
@@ -101,7 +103,7 @@ export function QuestionEditor({
               size="icon"
               className="h-8 w-8 text-stone-400 hover:bg-red-50 hover:text-red-600"
               onClick={onDelete}
-              aria-label="Supprimer la question"
+              aria-label={t('Supprimer la question')}
             >
               <Trash2 className="h-4 w-4" />
             </Button>
@@ -111,14 +113,18 @@ export function QuestionEditor({
 
       <p className="mb-1.5 text-xs font-medium text-stone-500">
         {value.phase === 'rat'
-          ? 'Question de préparation (utilisée pour le test individuel PUIS le test en équipe)'
-          : "QCU d'application (résolue en équipe au sein du cas clinique, révélation automatique dès que toutes les équipes ont répondu)"}
+          ? t(
+              'Question de préparation (utilisée pour le test individuel PUIS le test en équipe)'
+            )
+          : t(
+              "QCU d'application (résolue en équipe au sein du cas clinique, révélation automatique dès que toutes les équipes ont répondu)"
+            )}
       </p>
 
       <Textarea
         value={value.text}
         onChange={(e) => onChange({ ...value, text: e.target.value })}
-        placeholder="Énoncez votre question ici…"
+        placeholder={t('Énoncez votre question ici…')}
         rows={2}
         className="mb-1 resize-none text-[15px]"
       />
@@ -130,8 +136,8 @@ export function QuestionEditor({
             <button
               type="button"
               onClick={() => onChange({ ...value, correct: i })}
-              title="Cocher la bonne réponse"
-              aria-label={`Marquer le choix ${LETTERS[i]} comme bonne réponse`}
+              title={t('Cocher la bonne réponse')}
+              aria-label={t('Marquer le choix {l} comme bonne réponse', { l: LETTERS[i] })}
               className={cn(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-sm font-bold transition-colors',
                 value.correct === i
@@ -144,7 +150,7 @@ export function QuestionEditor({
             <Input
               value={c}
               onChange={(e) => setChoice(i, e.target.value)}
-              placeholder={`Choix ${LETTERS[i]}`}
+              placeholder={t('Choix {l}', { l: LETTERS[i] })}
               className="h-10 flex-1"
             />
             {value.choices.length > 2 && (
@@ -154,7 +160,7 @@ export function QuestionEditor({
                 size="icon"
                 className="h-9 w-9 shrink-0 text-stone-300 hover:bg-red-50 hover:text-red-600"
                 onClick={() => removeChoice(i)}
-                aria-label={`Supprimer le choix ${LETTERS[i]}`}
+                aria-label={t('Supprimer le choix {l}', { l: LETTERS[i] })}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -168,7 +174,8 @@ export function QuestionEditor({
 
       <div className="mt-3 flex items-center justify-between">
         <p className="text-xs text-stone-500">
-          La bonne réponse est entourée de <span className="font-semibold text-emerald-700">vert</span>.
+          {t('La bonne réponse est entourée de')}{' '}
+          <span className="font-semibold text-emerald-700">{t('vert')}</span>.
         </p>
         {value.choices.length < 6 && (
           <Button
@@ -179,7 +186,7 @@ export function QuestionEditor({
             className="h-8 border-stone-300 text-stone-600"
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
-            Choix
+            {t('Ajouter un choix')}
           </Button>
         )}
       </div>

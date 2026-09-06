@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LETTERS, PHASE_INFO, type Phase } from '@/lib/tbl-types'
+import { useI18n } from '@/lib/i18n'
 
 // ---------- Minute / compte à rebours ----------
 
@@ -19,6 +20,7 @@ export function Countdown({ startedAt, minutes }: { startedAt: string; minutes: 
   const abs = Math.abs(remaining)
   const mm = String(Math.floor(abs / 60)).padStart(2, '0')
   const ss = String(abs % 60).padStart(2, '0')
+  const { t } = useI18n()
   return (
     <span
       className={cn(
@@ -26,7 +28,7 @@ export function Countdown({ startedAt, minutes }: { startedAt: string; minutes: 
         over ? 'text-red-600' : remaining < 60 ? 'text-amber-600' : 'text-emerald-700'
       )}
     >
-      {over ? 'Temps écoulé (+' : ''}
+      {over ? t('Temps écoulé (+') : ''}
       {mm}:{ss}
       {over ? ')' : ''}
     </span>
@@ -63,6 +65,7 @@ const PHASE_BADGE_COLORS: Record<Phase, string> = {
 }
 
 export function PhaseBadge({ phase, className }: { phase: Phase; className?: string }) {
+  const { t } = useI18n()
   return (
     <span
       className={cn(
@@ -71,7 +74,7 @@ export function PhaseBadge({ phase, className }: { phase: Phase; className?: str
         className
       )}
     >
-      {PHASE_INFO[phase].short}
+      {t(PHASE_INFO[phase].short)}
     </span>
   )
 }
@@ -111,7 +114,7 @@ export function ChoiceButton({
       onClick={onClick}
       aria-pressed={state === 'selected'}
       className={cn(
-        'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left text-[15px] leading-snug transition-all',
+        'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-start text-[15px] leading-snug transition-all',
         'min-h-[56px] touch-manipulation',
         CHOICE_STYLES[state],
         disabled && 'cursor-not-allowed opacity-90'
