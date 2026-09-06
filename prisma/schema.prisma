@@ -215,6 +215,12 @@ model AlertEvent {
   studentId String
   student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   kind      String // 'screenshot' | 'tab_hidden'
+  // v2.5.1 : épreuve en cours AU MOMENT du signalement (valeur du statut
+  // de la séance) — 'irat' | 'trat' | 'application' | 'appeal' | 'peer'…
+  // NULL = signalement antérieur à la v2.5.1 (ou phase inconnue) : affiché
+  // côté enseignant sous « Autres moments ». Colonne additive, nullable →
+  // la mise à jour des bases existantes est autorisée par db-apply.mjs.
+  phase      String?
   createdAt DateTime @default(now())
 
   @@index([studentId, kind, createdAt])

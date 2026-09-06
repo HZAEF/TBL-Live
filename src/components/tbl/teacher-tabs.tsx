@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, Download, Plus, Save, Trash2, Users, Wand2, X } from 'lucide-react'
+import { Check, Download, Plus, Save, ShieldAlert, Trash2, Users, Wand2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
-import { t, useI18n } from '@/lib/i18n'
+import { t, useI18n, formatDate } from '@/lib/i18n'
 import type { DashboardDTO } from '@/lib/tbl-types'
 import { gradeForStudent, fmtNote } from '@/lib/grades'
 import { choiceLetter } from './shared'
@@ -1042,6 +1042,162 @@ export function AppealsTab({ data, manage }: { data: DashboardDTO; manage: Manag
         )
       })}
     </div>
+  )
+}
+
+// ================= Onglet SIGNALEMENTS (v2.5.1) =================
+// Rubrique demandée par l'enseignant, à part entière et placée juste
+// après « Réclamations ». Chaque signalement envoyé par les appareils
+// étudiants est divisé PAR ÉPREUVE : iRAT, tRAT, application (= cas
+// cliniques). Les événements hors épreuve (accueil, réclamations,
+// évaluation par les pairs…) ou antérieurs à la v2.5.1 (phase NULL)
+// sont regroupés sous « Autres moments ». Rappel : ce sont des indices
+// à interpréter, jamais des preuves.
+
+const ALERT_CATS = ['irat', 'trat', 'application', 'autres'] as const
+type AlertCat = (typeof ALERT_CATS)[number]
+
+interface AlertCell {
+  total: number
+  /** combinaison de touches de capture (PC uniquement) */
+  captures: number
+  /** application passée en arrière-plan pendant l'épreuve */
+  sorties: number
+}
+
+function catOf(phase: string | null): AlertCat {
+  if (phase === 'irat' || phase === 'trat' || phase === 'application') return phase
+  return 'autres'
+}
+
+export function SignalementsTab({ data }: { data: DashboardDTO }) {
+  const { t } = useI18n()
+  const alerts = data.alerts ?? []
+
+  if (alerts.length === 0) {
+    return (
+      <p className="rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center text-sm text-stone-500">
+        {t(
+          "Aucun signalement pour le moment. Les suspicions de capture d’écran (ordinateur) et les sorties de l’application pendant les épreuves apparaîtront ici, réparties par étudiant et par épreuve."
+        )}
+      </p>
+    )
+  }
+
+  // Regroupement : une ligne par étudiant, un compteur par épreuve.
+  const rows: {
+    key: string
+    name: string
+    cells: Record<AlertCat, AlertCell>
+    total: number
+    last: Date
+  }[] = []
+  const byStudent = new Map<string, (typeof rows)[number]>()
+  for (const a of alerts) {
+    let row = byStudent.get(a.studentId)
+    if (!row) {
+      row = {
+        key: a.studentId,
+        name: a.studentName,
+        cells: {
+          irat: { total: 0, captures: 0, sorties: 0 },
+          trat: { total: 0, captures: 0, sorties: 0 },
+          application: { total: 0, captures: 0, sorties: 0 },
+          autres: { total: 0, captures: 0, sorties: 0 },
+        },
+        total: 0,
+        last: new Date(a.createdAt),
+      }
+      byStudent.set(a.studentId, row)
+      rows.push(row)
+    }
+    const cell = row.cells[catOf(a.phase)]
+    cell.total += 1
+    if (a.kind === 'screenshot') cell.captures += 1
+    else cell.sorties += 1
+    row.total += 1
+    const d = new Date(a.createdAt)
+    if (d > row.last) row.last = d
+  }
+  // Étudiants les plus récemment signalés en premier.
+  rows.sort((x, y) => y.last.getTime() - x.last.getTime())
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-stone-500">
+        {t(
+          'Chaque signalement est classé par épreuve : iRAT, tRAT ou application (cas cliniques). Ceux survenus hors épreuve — accueil, réclamations, évaluation par les pairs… — sont regroupés sous « Autres moments ».'
+        )}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[620px] text-sm">
+          <thead>
+            <tr className="border-b border-stone-200 text-start text-xs text-stone-500">
+              <th className="py-2 pe-3 font-medium">{t('Étudiant')}</th>
+              <th className="py-2 px-1.5 text-center font-medium">{t('iRAT')}</th>
+              <th className="py-2 px-1.5 text-center font-medium">{t('tRAT')}</th>
+              <th className="py-2 px-1.5 text-center font-medium">
+                {t('Application (cas cliniques)')}
+              </th>
+              <th className="py-2 px-1.5 text-center font-medium">{t('Autres moments')}</th>
+              <th className="py-2 px-1.5 text-center font-medium">{t('Total')}</th>
+              <th className="py-2 ps-3 text-center font-medium">{t('Dernier')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-b border-stone-100 align-top">
+                <td className="py-2 pe-3 font-medium text-stone-800">{r.name}</td>
+                {ALERT_CATS.map((cat) => (
+                  <AlertCountCell key={cat} cell={r.cells[cat]} />
+                ))}
+                <td className="py-2 px-1.5 text-center font-bold text-stone-900">{r.total}</td>
+                <td
+                  className="py-2 ps-3 text-center text-xs text-stone-500"
+                  title={formatDate(r.last)}
+                >
+                  {formatDate(r.last, { hour: '2-digit', minute: '2-digit' })}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-700">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+        {t(
+          'Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.'
+        )}
+      </p>
+    </div>
+  )
+}
+
+/** Cellule compteur d'une épreuve : total en gras, détail captures /
+ *  sorties en petit sous le nombre (— si aucun). */
+function AlertCountCell({ cell }: { cell: AlertCell }) {
+  const { t } = useI18n()
+  if (cell.total === 0) {
+    return (
+      <td className="py-2 px-1.5 text-center">
+        <span className="text-stone-300">—</span>
+      </td>
+    )
+  }
+  return (
+    <td className="py-2 px-1.5 text-center">
+      <span className="font-bold text-amber-800">{cell.total}</span>
+      {cell.captures > 0 && (
+        <p className="text-[10px] leading-tight text-stone-500">
+          {t('{n} capture(s) d’écran suspectée(s)', { n: cell.captures })}
+        </p>
+      )}
+      {cell.sorties > 0 && (
+        <p className="text-[10px] leading-tight text-stone-500">
+          {t('{n} sortie(s) de l’application', { n: cell.sorties })}
+        </p>
+      )}
+    </td>
   )
 }
 

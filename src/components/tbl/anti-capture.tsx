@@ -63,9 +63,14 @@ function watermarkUrl(text: string): string {
 }
 
 /** Envoi silencieux d'un signalement à l'enseignant (jamais de message
- *  ni d'erreur affichés à l'étudiant). Référence stable : ne change
- *  que si le jeton change. */
-function useReport(token: string | undefined): (kind: AlertKind) => void {
+ *  ni d'erreur affichés à l'étudiant). La phase est envoyée avec le
+ *  signalement (v2.5.1) pour que l'enseignant sache pendant QUELLE épreuve
+ *  (iRAT, tRAT, application…) l'événement a eu lieu. Référence stable :
+ *  ne change que si le jeton ou la phase change. */
+function useReport(
+  token: string | undefined,
+  phase: string | undefined
+): (kind: AlertKind) => void {
   // Anti-rafales : au plus un envoi par type toutes les 5 s côté client
   // (le serveur re-déduplique à la minute).
   const lastSent = useRef<Record<string, number>>({})
@@ -78,10 +83,10 @@ function useReport(token: string | undefined): (kind: AlertKind) => void {
       fetch('/api/alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ kind }),
+        body: JSON.stringify({ kind, phase: phase ?? null }),
       }).catch(() => {})
     },
-    [token]
+    [token, phase]
   )
 }
 
@@ -90,6 +95,7 @@ export function AntiCapture({
   printMessage,
   reportToken,
   watchTab,
+  phase,
   children,
 }: {
   /** Ce qui identifie l'écran dans le filigrane (nom · code). */
@@ -102,6 +108,10 @@ export function AntiCapture({
   /** true pendant les phases de test (iRAT/tRAT/application) : une sortie
    *  de l'application (changement d'onglet/app, verrouillage) est signalée. */
   watchTab?: boolean
+  /** v2.5.1 : phase en cours (statut de la séance) envoyée avec chaque
+   *  signalement — permet à l'enseignant de savoir pendant quelle épreuve
+   *  (iRAT, tRAT, application…) l'événement a eu lieu. */
+  phase?: string
   children: ReactNode
 }) {
   // Initialisation paresseuse : ce composant n'est monté QU'EN CLIENT
@@ -124,7 +134,7 @@ export function AntiCapture({
   // Pendant les tests (watchTab), chaque passage en arrière-plan
   // est de plus signalé à l'enseignant — signal FIABLE sur tous les
   // appareils (téléphones inclus), contrairement aux captures.
-  const report = useReport(reportToken)
+  const report = useReport(reportToken, phase)
   useEffect(() => {
     const onVis = () => {
       setHidden(document.hidden)

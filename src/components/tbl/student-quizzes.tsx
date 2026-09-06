@@ -55,7 +55,9 @@ export function IratQuiz({
         <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white">
           <Check className="h-7 w-7" />
         </span>
-        <p className="mt-3 text-lg font-bold text-emerald-900">{t('Réponses enregistrées !')}</p>
+        {/* v2.5.1 : « Épreuve terminée » (demande enseignant) — bien plus
+            clair que « Réponses enregistrées » une fois le test bouclé. */}
+        <p className="mt-3 text-lg font-bold text-emerald-900">{t('Épreuve terminée !')}</p>
         <p className="mt-1 text-sm text-emerald-800">
           {t(
             'Vous avez répondu aux {n} questions. Attendez les instructions de votre professeur.',
@@ -220,6 +222,11 @@ export function TratQuiz({
     if (at.length >= 4) return 'failed'
     return 'pending'
   })
+  // v2.5.1 : épreuve entièrement traitée (chaque question trouvée, ou 4
+  // tentatives épuisées) → fin d'épreuve explicite. L'ancien bouton
+  // « Question suivante » restait affiché sans rien avancer : il n'avait
+  // plus de sens une fois le test accompli (demande de l'enseignant).
+  const allDone = statuses.every((s) => s !== 'pending')
 
   return (
     <div className="space-y-4">
@@ -237,6 +244,24 @@ export function TratQuiz({
           })}
         </p>
       </div>
+
+      {/* v2.5.1 : carte de fin d'épreuve — visible dès que l'équipe a
+          traité toutes les questions (les questions restent consultables
+          en dessous pour révision). */}
+      {allDone && (
+        <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6 text-center">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white">
+            <Check className="h-7 w-7" />
+          </span>
+          <p className="mt-3 text-lg font-bold text-emerald-900">{t('Épreuve terminée !')}</p>
+          <p className="mt-1 text-sm text-emerald-800">
+            {t(
+              'Vous avez répondu aux {n} questions. Attendez les instructions de votre professeur.',
+              { n: questions.length }
+            )}
+          </p>
+        </div>
+      )}
 
       <QuestionProgress questions={questions} statuses={statuses} current={index} onSelect={setIndex} />
 
@@ -295,7 +320,18 @@ export function TratQuiz({
           </p>
         )}
 
-        {!found ? (
+        {allDone ? (
+          // v2.5.1 : en fin d'épreuve, le bouton confirme la fin au lieu
+          // de proposer une « Question suivante » inexistante.
+          <Button
+            variant="outline"
+            disabled
+            className="mt-5 h-12 w-full border-emerald-400 text-emerald-700"
+          >
+            <Check className="mr-2 h-5 w-5" />
+            {t('Épreuve terminée')}
+          </Button>
+        ) : !found ? (
           <Button
             className="mt-5 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
             disabled={selected === null || submitting || exhausted}

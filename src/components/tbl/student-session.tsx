@@ -103,6 +103,9 @@ export function StudentSession({
       // Sorties d'application signalées pendant les phases de test
       // (iRAT, tRAT, application) — signal fiable sur tous les appareils.
       watchTab={['irat', 'trat', 'application'].includes(status)}
+      // v2.5.1 : épreuve en cours transmise avec chaque signalement, pour
+      // l'affichage « par épreuve » dans l'onglet Signalements enseignant.
+      phase={status}
     >
       <div className="mx-auto max-w-2xl space-y-4">
         {/* En-tête */}

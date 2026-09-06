@@ -102,6 +102,7 @@ export async function GET(
             id: true,
             studentId: true,
             kind: true,
+            phase: true,
             createdAt: true,
             student: { select: { name: true } },
           },
@@ -164,6 +165,7 @@ export async function GET(
         studentId: a.studentId,
         studentName: a.student.name,
         kind: a.kind as 'screenshot' | 'tab_hidden',
+        phase: a.phase,
         createdAt: a.createdAt,
       })),
     })

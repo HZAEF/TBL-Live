@@ -103,6 +103,10 @@ export interface SessionAlertDTO {
   /** 'screenshot' : combinaison de touches de capture (PC uniquement) ;
    *  'tab_hidden' : application passée en arrière-plan pendant un test. */
   kind: 'screenshot' | 'tab_hidden'
+  /** v2.5.1 : épreuve en cours au moment du signalement (statut de la
+   *  séance — 'irat', 'trat', 'application'…). NULL = hors épreuve connue
+   *  ou signalement antérieur à la v2.5.1 → « Autres moments ». */
+  phase: string | null
   createdAt: string
 }
 

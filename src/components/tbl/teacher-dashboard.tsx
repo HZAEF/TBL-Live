@@ -18,7 +18,6 @@ import {
   Dices,
   RotateCcw,
   Trash2,
-  ShieldAlert,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,7 +47,7 @@ import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import { useI18n, formatDate } from '@/lib/i18n'
 import { Countdown, ElapsedSince, InfoCard, PhaseBadge, choiceLetter } from './shared'
-import { TeamsTab, QuestionsTab, ResultsTab, AppealsTab, exportCsv } from './teacher-tabs'
+import { TeamsTab, QuestionsTab, ResultsTab, AppealsTab, SignalementsTab, exportCsv } from './teacher-tabs'
 import { StatsTab } from './stats-tab'
 
 export function TeacherDashboard({
@@ -380,9 +379,6 @@ export function TeacherDashboard({
         <PurgeBanner purgedAt={data.session.dataPurgedAt} />
       )}
 
-      {/* v2.5.0 : signalements anti-capture (suspicions, jamais des preuves) */}
-      {data.alerts && data.alerts.length > 0 && <AlertsBanner alerts={data.alerts} />}
-
       {/* Fil des phases */}
       <PhaseStepper current={status} onSelect={confirmPhase} disabled={!!data.session.deletedAt} />
 
@@ -412,6 +408,17 @@ export function TeacherDashboard({
               </span>
             )}
           </TabsTrigger>
+          {/* v2.5.1 : rubrique « Signalements » demandée par l'enseignant,
+              à part entière juste après « Réclamations » (alertes anti-capture
+              divisées par épreuve, voir teacher-tabs.tsx). */}
+          <TabsTrigger value="alerts" className="flex-1 px-3 py-2 sm:flex-none">
+            {t('Signalements')}
+            {(data.alerts?.length ?? 0) > 0 && (
+              <span className="ml-1.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                {data.alerts!.length}
+              </span>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -436,6 +443,9 @@ export function TeacherDashboard({
         </TabsContent>
         <TabsContent value="appeals" className="mt-4">
           <AppealsTab data={data} manage={manage} />
+        </TabsContent>
+        <TabsContent value="alerts" className="mt-4">
+          <SignalementsTab data={data} />
         </TabsContent>
       </Tabs>
 
@@ -830,65 +840,6 @@ function PurgeBanner({ purgedAt }: { purgedAt: string }) {
           { date: formatDate(d) }
         )}
       </p>
-    </div>
-  )
-}
-
-// v2.5.0 — Bandeau des signalements envoyés par les appareils étudiants :
-// suspicion de capture d'écran (PC) ou sortie de l'application pendant un
-// test (tous appareils). Ce sont des indices à interpréter, jamais des
-// preuves — un écran verrouillé produit aussi une « sortie ».
-function AlertsBanner({ alerts }: { alerts: DashboardDTO['alerts'] }) {
-  const { t } = useI18n()
-
-  // Regroupement par étudiant : nombre de chaque type + dernier horodatage.
-  const rows = useMemo(() => {
-    const by = new Map<
-      string,
-      { name: string; screenshots: number; tabHiddens: number; last: Date }
-    >()
-    for (const a of alerts ?? []) {
-      const r =
-        by.get(a.studentId) ??
-        { name: a.studentName, screenshots: 0, tabHiddens: 0, last: new Date(a.createdAt) }
-      if (a.kind === 'screenshot') r.screenshots += 1
-      else r.tabHiddens += 1
-      const d = new Date(a.createdAt)
-      if (d > r.last) r.last = d
-      by.set(a.studentId, r)
-    }
-    return Array.from(by.values()).sort((x, y) => y.last.getTime() - x.last.getTime())
-  }, [alerts])
-
-  if (rows.length === 0) return null
-
-  return (
-    <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
-      <div className="flex items-start gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-          <ShieldAlert className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="font-bold text-amber-900">{t('Signalements pendant les tests')}</p>
-          <div className="mt-2 space-y-1">
-            {rows.map((r) => (
-              <p key={r.name} className="text-sm leading-relaxed text-amber-900">
-                <strong>{r.name}</strong>
-                {r.screenshots > 0 && <> · {t('{n} capture(s) d’écran suspectée(s)', { n: r.screenshots })}</>}
-                {r.tabHiddens > 0 && <> · {t('{n} sortie(s) de l’application', { n: r.tabHiddens })}</>}
-                <> · {t('dernier signalement : {time}', {
-                  time: formatDate(r.last, { hour: '2-digit', minute: '2-digit' }),
-                })}</>
-              </p>
-            ))}
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-amber-700">
-            {t(
-              'Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.'
-            )}
-          </p>
-        </div>
-      </div>
     </div>
   )
 }
