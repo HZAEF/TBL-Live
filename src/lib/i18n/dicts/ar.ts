@@ -650,4 +650,13 @@ export const ar: Record<string, string> = {
   "Fichier de sauvegarde téléchargé.": "تم تنزيل ملف النسخة الاحتياطية.",
   "Sauvegarder": "نسخ احتياطي",
   "Télécharger une copie complète de la séance (fichier JSON)": "تنزيل نسخة كاملة من الجلسة (ملف JSON)",
+  "Impression désactivée pendant la séance.": "الطباعة معطّلة أثناء الجلسة.",
+  "Signalements pendant les tests": "تنبيهات أثناء الاختبارات",
+  "{n} capture(s) d’écran suspectée(s)": "لقطة شاشة مشتبه بها: {n}",
+  "{n} sortie(s) de l’application": "مغادرة التطبيق: {n}",
+  "dernier signalement : {time}": "آخر تنبيه: {time}",
+  "Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.": "هذا اشتباه وليس دليلاً: قد يكون الشاشة قد قُفلت ببساطة أو أن مجموعة المفاتيح تخص المتصفح. لا يمكن منع لقطات الشاشة (حد من المتصفح)، لكن كل صورة تبقى موسومة باسم الطالب.",
+  "Erreur serveur.": "خطأ في الخادم.",
+  "Séance supprimée.": "تم حذف الجلسة.",
+  "Type de signalement inconnu.": "نوع تنبيه غير معروف.",
 }

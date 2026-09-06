@@ -19,6 +19,7 @@ import { useI18n } from '@/lib/i18n'
 import { gradeForStudentSelf, fmtNote } from '@/lib/grades'
 import { ChoiceButton, choiceLetter, InfoCard, PhaseBadge } from './shared'
 import { IratQuiz, TratQuiz, AppealView, ApplicationView, PeerView } from './student-quizzes'
+import { AntiCapture } from './anti-capture'
 
 export function StudentSession({
   token,
@@ -89,9 +90,22 @@ export function StudentSession({
 
   const status = data.session.status
 
+  // v2.5.0 : protection anti-capture sur TOUTE la séance étudiante
+  // (filigrane nom + code + horodatage, flou en arrière-plan,
+  // anti-copie, impression bloquée). Voir anti-capture.tsx.
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
-      {/* En-tête */}
+    <AntiCapture
+      label={`${data.me.name} · ${data.session.code}`}
+      printMessage={t('Impression désactivée pendant la séance.')}
+      // v2.5.0 : signalement silencieux des suspicions de capture (PC)
+      // vers le tableau de bord enseignant.
+      reportToken={token}
+      // Sorties d'application signalées pendant les phases de test
+      // (iRAT, tRAT, application) — signal fiable sur tous les appareils.
+      watchTab={['irat', 'trat', 'application'].includes(status)}
+    >
+      <div className="mx-auto max-w-2xl space-y-4">
+        {/* En-tête */}
       <div className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -141,14 +155,14 @@ export function StudentSession({
       </div>
 
       {/* Contenu selon la phase */}
-      {status === 'lobby' && <LobbyView data={data} />}
-      {status === 'irat' && <IratQuiz data={data} refresh={refresh} token={token} />}
-      {status === 'trat' && <TratQuiz data={data} refresh={refresh} token={token} />}
-      {status === 'appeal' && <AppealView data={data} refresh={refresh} token={token} />}
-      {status === 'feedback' && <FeedbackView data={data} />}
-      {status === 'application' && <ApplicationView data={data} refresh={refresh} token={token} />}
-      {status === 'peer' && <PeerView data={data} refresh={refresh} token={token} />}
-      {status === 'finished' && <FinishedView data={data} onExit={onExit} />}
+        {status === 'lobby' && <LobbyView data={data} />}
+        {status === 'irat' && <IratQuiz data={data} refresh={refresh} token={token} />}
+        {status === 'trat' && <TratQuiz data={data} refresh={refresh} token={token} />}
+        {status === 'appeal' && <AppealView data={data} refresh={refresh} token={token} />}
+        {status === 'feedback' && <FeedbackView data={data} />}
+        {status === 'application' && <ApplicationView data={data} refresh={refresh} token={token} />}
+        {status === 'peer' && <PeerView data={data} refresh={refresh} token={token} />}
+        {status === 'finished' && <FinishedView data={data} onExit={onExit} />}
 
       {/* Mon code de reprise */}
       <AlertDialog open={showCode} onOpenChange={setShowCode}>
@@ -205,7 +219,8 @@ export function StudentSession({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+      </div>
+    </AntiCapture>
   )
 }
 

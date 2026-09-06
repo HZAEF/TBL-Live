@@ -90,6 +90,20 @@ export interface DashboardDTO {
   }[]
   appAnswers: { teamId: string; questionId: string; choice: number; text: string | null }[]
   peerEvals: { evaluatorId: string; evaluatedId: string; score: number; comment: string | null }[]
+  /** v2.5.0 : signalements automatiques envoyés par les appareils étudiants
+   *  (capture d'écran suspectée sur PC, sortie de l'application pendant un
+   *  test). Des SUSPICIONS à interpréter, jamais des preuves. */
+  alerts?: SessionAlertDTO[]
+}
+
+export interface SessionAlertDTO {
+  id: string
+  studentId: string
+  studentName: string
+  /** 'screenshot' : combinaison de touches de capture (PC uniquement) ;
+   *  'tab_hidden' : application passée en arrière-plan pendant un test. */
+  kind: 'screenshot' | 'tab_hidden'
+  createdAt: string
 }
 
 export interface StudentStateDTO {

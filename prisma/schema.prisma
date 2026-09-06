@@ -98,6 +98,8 @@ model Student {
   answers   Answer[] // réponses iRAT (individuelles)
   peerGiven PeerEval[] @relation("evaluator")
   peerReceived PeerEval[] @relation("evaluated")
+  // v2.5.0 : signalements anti-capture (capture suspectée / sortie d'application)
+  alerts    AlertEvent[]
 
   @@index([sessionId])
   @@index([teamId])
@@ -199,4 +201,21 @@ model PeerEval {
 
   @@unique([evaluatorId, evaluatedId])
   @@index([sessionId])
+}
+
+// v2.5.0 — Signalements envoyés par la vue étudiant :
+//  - 'screenshot'  : combinaison de touches typique d'une capture d'écran
+//                    (Impr. écran, Cmd+Shift+3/4/5, Win+Shift+S) — PC uniquement,
+//                    aucune API n'existe sur téléphone ;
+//  - 'tab_hidden'  : l'application est passée en arrière-plan pendant un test
+//                    (fiable sur tous les appareils).
+// Ce sont des SUSPICIONS à interpréter, jamais des preuves.
+model AlertEvent {
+  id        String   @id @default(cuid())
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  kind      String // 'screenshot' | 'tab_hidden'
+  createdAt DateTime @default(now())
+
+  @@index([studentId, kind, createdAt])
 }

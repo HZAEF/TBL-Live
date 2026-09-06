@@ -650,4 +650,13 @@ export const zh: Record<string, string> = {
   "Fichier de sauvegarde téléchargé.": "备份文件已下载。",
   "Sauvegarder": "备份",
   "Télécharger une copie complète de la séance (fichier JSON)": "下载整场课程的完整副本（JSON 文件）",
+  "Impression désactivée pendant la séance.": "课程进行期间，打印功能已停用。",
+  "Signalements pendant les tests": "测试期间的自动报告",
+  "{n} capture(s) d’écran suspectée(s)": "疑似截屏 {n} 次",
+  "{n} sortie(s) de l’application": "离开应用 {n} 次",
+  "dernier signalement : {time}": "最近报告：{time}",
+  "Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.": "这只是可疑迹象而非证据：屏幕可能只是自动锁定，或按键组合属于浏览器功能。截屏无法被阻止（浏览器限制），但每张图片都带有学生姓名水印。",
+  "Erreur serveur.": "服务器错误。",
+  "Séance supprimée.": "课程已删除。",
+  "Type de signalement inconnu.": "未知的报告类型。",
 }

@@ -120,3 +120,61 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ============================================================
+   v2.5.0 — Protection anti-capture (vue étudiant)
+   Aucun navigateur ne permet d'EMPÊCHER une capture d'écran ;
+   ces règles rendent chaque image traçable (filigrane qui /
+   quand), floutent le contenu dès que l'onglet passe en
+   arrière-plan et gênent la copie. Voir anti-capture.tsx.
+   ============================================================ */
+
+/* Contenu protégé : pas de sélection de texte ni d'appui long. */
+.tbl-protect {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Les champs de saisie (réclamations, commentaires des pairs)
+   restent entièrement utilisables et sélectionnables. */
+.tbl-protect input,
+.tbl-protect textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Onglet/application en arrière-plan → tout devient flou
+   (aperçu des applications récentes, enregistrements d'écran). */
+.tbl-protect-hidden {
+  filter: blur(18px) grayscale(100%);
+}
+
+/* Filigrane plein écran : nom · code séance · date/heure,
+   répété en diagonale, au-dessus du contenu mais neutre aux
+   touchers (pointer-events: none). */
+.tbl-watermark {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+/* Impression / « imprimer en PDF » : contenu remplacé par un
+   message. .tbl-print-msg est rendu hors de .tbl-protect pour
+   rester visible quand celui-ci est masqué. */
+.tbl-print-msg {
+  display: none;
+  padding: 2rem;
+  text-align: center;
+  font-weight: 600;
+}
+@media print {
+  .tbl-protect {
+    display: none !important;
+  }
+  .tbl-print-msg {
+    display: block !important;
+  }
+}

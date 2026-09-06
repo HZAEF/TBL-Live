@@ -650,4 +650,13 @@ export const es: Record<string, string> = {
   "Fichier de sauvegarde téléchargé.": "Archivo de copia de seguridad descargado.",
   "Sauvegarder": "Guardar copia",
   "Télécharger une copie complète de la séance (fichier JSON)": "Descargar una copia completa de la sesión (archivo JSON)",
+  "Impression désactivée pendant la séance.": "La impresión está desactivada durante la sesión.",
+  "Signalements pendant les tests": "Avisos durante las pruebas",
+  "{n} capture(s) d’écran suspectée(s)": "{n} captura(s) de pantalla sospechosa(s)",
+  "{n} sortie(s) de l’application": "{n} salida(s) de la aplicación",
+  "dernier signalement : {time}": "último aviso: {time}",
+  "Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.": "Una sospecha, no una prueba: la pantalla puede simplemente haberse bloqueado o la combinación de teclas pertenecer al navegador. Las capturas nunca se pueden bloquear (límite de los navegadores), pero cada imagen queda marcada con el nombre del estudiante.",
+  "Erreur serveur.": "Error del servidor.",
+  "Séance supprimée.": "Sesión eliminada.",
+  "Type de signalement inconnu.": "Tipo de aviso desconocido.",
 };

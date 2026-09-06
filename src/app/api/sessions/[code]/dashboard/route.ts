@@ -34,7 +34,7 @@ export async function GET(
       )
     }
 
-    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals] =
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
@@ -92,6 +92,20 @@ export async function GET(
             comment: true,
           },
         }),
+        // v2.5.0 : signalements anti-capture (capture suspectée / sortie
+        // d'application) — les plus récents d'abord, volume borné.
+        db.alertEvent.findMany({
+          where: { student: { sessionId: session.id } },
+          orderBy: { createdAt: 'desc' },
+          take: 200,
+          select: {
+            id: true,
+            studentId: true,
+            kind: true,
+            createdAt: true,
+            student: { select: { name: true } },
+          },
+        }),
       ])
 
     // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
@@ -145,6 +159,13 @@ export async function GET(
         text: a.text,
       })),
       peerEvals,
+      alerts: alertEvents.map((a) => ({
+        id: a.id,
+        studentId: a.studentId,
+        studentName: a.student.name,
+        kind: a.kind as 'screenshot' | 'tab_hidden',
+        createdAt: a.createdAt,
+      })),
     })
   } catch (e) {
     console.error('GET /api/sessions/[code]/dashboard', e)

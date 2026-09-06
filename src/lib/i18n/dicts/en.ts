@@ -650,4 +650,13 @@ export const en: Record<string, string> = {
   "Fichier de sauvegarde téléchargé.": "Backup file downloaded.",
   "Sauvegarder": "Back up",
   "Télécharger une copie complète de la séance (fichier JSON)": "Download a complete copy of the session (JSON file)",
+  "Impression désactivée pendant la séance.": "Printing is disabled during the session.",
+  "Signalements pendant les tests": "Reports during tests",
+  "{n} capture(s) d’écran suspectée(s)": "{n} suspected screenshot(s)",
+  "{n} sortie(s) de l’application": "{n} departure(s) from the app",
+  "dernier signalement : {time}": "latest report: {time}",
+  "Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.": "A suspicion, not proof: the screen may simply have locked, or the keyboard shortcut may belong to the browser. Screenshots can never be blocked (a browser limit) — but every image remains tagged with the student’s name.",
+  "Erreur serveur.": "Server error.",
+  "Séance supprimée.": "Session deleted.",
+  "Type de signalement inconnu.": "Unknown report type.",
 }

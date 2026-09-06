@@ -650,4 +650,13 @@ export const ru: Record<string, string> = {
   "Fichier de sauvegarde téléchargé.": "Файл резервной копии скачан.",
   "Sauvegarder": "Сохранить копию",
   "Télécharger une copie complète de la séance (fichier JSON)": "Скачать полную копию занятия (файл JSON)",
+  "Impression désactivée pendant la séance.": "Печать отключена во время занятия.",
+  "Signalements pendant les tests": "Сообщения во время тестов",
+  "{n} capture(s) d’écran suspectée(s)": "подозрительных скриншотов: {n}",
+  "{n} sortie(s) de l’application": "выходов из приложения: {n}",
+  "dernier signalement : {time}": "последнее сообщение: {time}",
+  "Une suspicion, pas une preuve : l’écran peut s’être simplement verrouillé, ou la combinaison de touches appartenir au navigateur. Les captures ne sont jamais bloquables (limite des navigateurs) — mais chaque image reste marquée du nom de l’étudiant.": "Это подозрение, а не доказательство: экран мог просто заблокироваться, а сочетание клавиш могло принадлежать браузеру. Скриншоты нельзя заблокировать (ограничение браузеров), но каждое изображение остаётся помечено именем студента.",
+  "Erreur serveur.": "Ошибка сервера.",
+  "Séance supprimée.": "Занятие удалено.",
+  "Type de signalement inconnu.": "Неизвестный тип сообщения.",
 }
