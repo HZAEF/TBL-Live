@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   Plus,
   LogIn,
@@ -10,6 +10,8 @@ import {
   Dices,
   ClipboardList,
   RotateCcw,
+  Upload,
+  Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,7 +31,7 @@ import { DEFAULT_SAI_ITEMS, SAI_SUBSCALES, SAI_SUBSCALE_INFO, type SaiSubscale }
 import { t, useI18n } from '@/lib/i18n'
 import { useToast } from '@/hooks/use-toast'
 
-type View = 'menu' | 'create' | 'login' | 'dashboard'
+type View = 'menu' | 'create' | 'login' | 'upload' | 'dashboard'
 
 export function TeacherPanel({ onExit }: { onExit: () => void }) {
   const [view, setView] = useState<View>('menu')
@@ -71,6 +73,7 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
           onExit={onExit}
           onCreate={() => setView('create')}
           onLogin={() => setView('login')}
+          onUpload={() => setView('upload')}
           onOpen={(code) => {
             const saved = getTeacherSessions()[code]
             if (saved) openDashboard(saved.code, saved.token, saved.title)
@@ -92,6 +95,21 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
           onLoggedIn={(code, token) => openDashboard(code, token)}
         />
       )}
+
+      {/* v2.8.1 : téléversement d'une sauvegarde .json depuis l'écran
+          d'accueil enseignant — l'enseignante a trois choix : créer une
+          séance, reprendre une séance, ou téléverser une séance. */}
+      {view === 'upload' && (
+        <UploadSessionForm
+          onCancel={() => setView('menu')}
+          onImported={(code, token, title) => openDashboard(code, token, title)}
+          onLoginNeeded={(code) => {
+            setLoginCode(code)
+            setSession(null)
+            setView('login')
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -101,11 +119,13 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
 function TeacherMenu({
   onCreate,
   onLogin,
+  onUpload,
   onOpen,
   onExit,
 }: {
   onCreate: () => void
   onLogin: () => void
+  onUpload: () => void
   onOpen: (code: string) => void
   onExit: () => void
 }) {
@@ -140,6 +160,26 @@ function TeacherMenu({
             <span className="block font-bold text-stone-900">{t('Reprendre une séance')}</span>
             <span className="mt-1 block text-sm leading-relaxed text-stone-600">
               {t('Vous avez déjà une séance ? Retrouvez-la avec son code et votre PIN.')}
+            </span>
+          </span>
+        </button>
+
+        {/* v2.8.1 : troisième choix — téléverser une séance depuis son
+            fichier de sauvegarde .json (ancienne rubrique Configurations,
+            demandé par l'enseignante). */}
+        <button
+          onClick={onUpload}
+          className="flex flex-col items-start gap-3 rounded-2xl border-2 border-stone-200 bg-white p-6 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-sky-500 hover:shadow-lg sm:col-span-2"
+        >
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+            <Upload className="h-5 w-5" />
+          </span>
+          <span>
+            <span className="block font-bold text-stone-900">{t('Téléverser une séance')}</span>
+            <span className="mt-1 block text-sm leading-relaxed text-stone-600">
+              {t(
+                'Recréez sur cet appareil une séance à partir de son fichier de sauvegarde .json (transfert depuis un autre ordinateur, ou restauration).'
+              )}
             </span>
           </span>
         </button>
@@ -856,6 +896,255 @@ function CreateSessionForm({
         >
           {submitting ? t('Création…') : t('Créer la séance')}
         </Button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------- Téléversement d'une séance (v2.8.1) ----------------
+
+/** Sauvegarde analysée côté client : seuls les champs utiles à
+ *  l'interface sont lus ici — le serveur revalide intégralement le
+ *  fichier avant d'écrire la moindre donnée. */
+interface ParsedBackup {
+  title: string
+  code: string
+  /** true = fichier de synchronisation (jetons inclus) : recréation
+   *  à l'identique, aucune saisie de PIN nécessaire. */
+  isV2: boolean
+  /** Jeton enseignant du fichier v2 (il appartient déjà à
+   *  l'enseignante : il est dans son fichier de sauvegarde). */
+  teacherToken: string
+  raw: unknown
+}
+
+function UploadSessionForm({
+  onCancel,
+  onImported,
+  onLoginNeeded,
+}: {
+  onCancel: () => void
+  onImported: (code: string, token: string, title: string) => void
+  onLoginNeeded: (code: string) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [parsed, setParsed] = useState<ParsedBackup | null>(null)
+  const [fileName, setFileName] = useState('')
+  const [pin, setPin] = useState('')
+  const [pin2, setPin2] = useState('')
+  const [error, setError] = useState('')
+  const [importing, setImporting] = useState(false)
+
+  const chooseFile = async (file: File) => {
+    setError('')
+    setParsed(null)
+    setFileName('')
+    setPin('')
+    setPin2('')
+    try {
+      const text = await file.text()
+      const raw = JSON.parse(text) as {
+        format?: string
+        session?: { code?: string; title?: string }
+        secrets?: { sessionId?: string; teacherToken?: string; teacherPin?: string }
+      }
+      const code = typeof raw.session?.code === 'string' ? raw.session.code.toUpperCase() : ''
+      if (!/^[A-Z0-9]{6}$/.test(code)) {
+        setError(t('Ce fichier n’est pas une sauvegarde de séance valide.'))
+        return
+      }
+      const token = typeof raw.secrets?.teacherToken === 'string' ? raw.secrets.teacherToken : ''
+      const isV2 =
+        raw.format === 'tbl-live-sync' &&
+        typeof raw.secrets?.sessionId === 'string' &&
+        token.length >= 32 &&
+        typeof raw.secrets?.teacherPin === 'string'
+      setFileName(file.name)
+      setParsed({
+        title:
+          typeof raw.session?.title === 'string' && raw.session.title.trim().length > 0
+            ? raw.session.title
+            : code,
+        code,
+        isV2,
+        teacherToken: isV2 ? token : '',
+        raw,
+      })
+    } catch {
+      setError(t('Ce fichier n’est pas une sauvegarde de séance valide.'))
+    } finally {
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const submit = async () => {
+    if (!parsed || importing) return
+    if (!parsed.isV2) {
+      if (!/^[A-Z0-9]{6,12}$/.test(pin)) {
+        setError(t('Le code PIN enseignant contient au moins 6 caractères (chiffres et lettres).'))
+        return
+      }
+      if (pin !== pin2) {
+        setError(t('Les deux PIN ne correspondent pas.'))
+        return
+      }
+    }
+    setError('')
+    setImporting(true)
+    try {
+      const res = await api<{ ok: boolean; restored: boolean; code: string; title: string }>(
+        '/api/sessions/import',
+        {
+          method: 'POST',
+          body: JSON.stringify({ backup: parsed.raw, pin: parsed.isV2 ? '' : pin }),
+        }
+      )
+      toast({
+        title: res.restored
+          ? t('Séance restaurée depuis le fichier')
+          : t('Séance recréée depuis le fichier'),
+        description: res.restored
+          ? t('Toutes les données du fichier remplacent celles de cet appareil.')
+          : t('La séance est prête sur cet appareil.'),
+      })
+      // v2 (synchronisation) : le jeton enseignant est dans le fichier →
+      // ouverture directe du tableau de bord. v1 (sauvegarde téléchargée,
+      // sans secrets) : connexion automatique avec le PIN qui vient d'être
+      // utilisé pour créer/restaurer la séance, pour récupérer le jeton.
+      if (parsed.isV2) {
+        onImported(res.code, parsed.teacherToken, res.title)
+        return
+      }
+      try {
+        const login = await api<{ code: string; teacherToken: string }>(
+          `/api/sessions/${res.code}/teacher`,
+          { method: 'POST', body: JSON.stringify({ pin }) }
+        )
+        onImported(res.code, login.teacherToken, res.title)
+      } catch {
+        // Téléversement réussi mais connexion impossible (rare) : la
+        // séance existe désormais ici — reconnexion par le formulaire
+        // habituel « Reprendre une séance ».
+        toast({
+          title: t('Séance importée — connexion requise'),
+          description: t('Reconnectez-vous via « Reprendre une séance » avec votre code PIN.'),
+        })
+        onLoginNeeded(res.code)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('Erreur inconnue.'))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-md space-y-4">
+      <div>
+        <h2 className="text-xl font-bold text-stone-900">{t('Téléverser une séance')}</h2>
+        <p className="mt-1 text-sm text-stone-600">
+          {t(
+            'Recréez une séance sur cet appareil à partir d’un fichier de sauvegarde .json téléchargé depuis l’application (bouton « Sauvegarder » du tableau de bord).'
+          )}
+        </p>
+      </div>
+      <div className="space-y-4 rounded-2xl border border-stone-200 bg-white p-5">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void chooseFile(f)
+          }}
+        />
+        <Button
+          variant="outline"
+          className="h-12 w-full border-stone-300 text-base"
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload className="mr-2 h-5 w-5" />
+          {parsed ? fileName || t('Choisir un fichier de sauvegarde…') : t('Choisir un fichier de sauvegarde…')}
+        </Button>
+
+        {parsed && (
+          <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                {t('Séance du fichier')}
+              </p>
+              <p className="mt-1 truncate text-sm font-semibold text-stone-800">{parsed.title}</p>
+              <p className="font-mono text-xs tracking-wider text-stone-500">{parsed.code}</p>
+            </div>
+            {parsed.isV2 ? (
+              <p className="text-xs leading-relaxed text-stone-600">
+                {t(
+                  'Fichier de synchronisation complet détecté : la séance sera recréée à l’identique (même code, même PIN) — aucune saisie nécessaire.'
+                )}
+              </p>
+            ) : (
+              <div className="space-y-3 border-t border-emerald-200 pt-3">
+                <p className="text-xs leading-relaxed text-stone-600">
+                  {t(
+                    'Si cette séance n’existe pas encore sur cet appareil, choisissez un code PIN (au moins 6 caractères, chiffres et lettres). Si elle existe déjà, entrez son code PIN actuel pour la restaurer.'
+                  )}
+                </p>
+                <div>
+                  <Label htmlFor="upload-pin">{t('Code PIN de la séance')}</Label>
+                  <Input
+                    id="upload-pin"
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
+                    autoCapitalize="characters"
+                    placeholder={t('6 caractères et plus')}
+                    className="mt-1.5 h-12 text-center font-mono text-lg tracking-[0.3em]"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="upload-pin2">{t('Confirmez le code PIN')}</Label>
+                  <Input
+                    id="upload-pin2"
+                    value={pin2}
+                    onChange={(e) => setPin2(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
+                    autoCapitalize="characters"
+                    placeholder={t('confirmez le PIN')}
+                    className="mt-1.5 h-12 text-center font-mono text-lg tracking-[0.3em]"
+                  />
+                  {pin.length > 0 && pin !== pin2 && (
+                    <p className="mt-1.5 text-xs text-red-600">{t('Les deux PIN ne correspondent pas.')}</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        )}
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={onCancel} className="h-12 flex-1 border-stone-300">
+            {t('Retour')}
+          </Button>
+          <Button
+            onClick={submit}
+            disabled={!parsed || importing}
+            className="h-12 flex-[2] bg-emerald-600 hover:bg-emerald-700"
+          >
+            {importing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {t('Téléversement…')}
+              </>
+            ) : (
+              t('Téléverser la séance')
+            )}
+          </Button>
+        </div>
       </div>
     </div>
   )

@@ -113,22 +113,132 @@ if (!diffSql) {
 }
 
 // ---- 2. Garde-fou anti-destructif ----
+// v2.7.0 : SQLite ne sait PAS ajouter une colonne NOT NULL par un simple
+// « ADD COLUMN » : Prisma reconstruit alors la table avec son idiome
+// officiel — CREATE TABLE "new_X" → INSERT INTO "new_X" (colonnes
+// existantes) SELECT … FROM "X" → DROP TABLE "X" → RENAME — qui COPIE
+// les données. Ce motif est reconnu et accepté, À CONDITION que chaque
+// colonne absente de la recopie soit nullable ou possède une valeur PAR
+// DÉFAUT (les lignes existantes restent donc valides) et qu'aucune
+// colonne recopiée ne disparaisse. Tout autre DROP reste refusé.
+function splitStatements(sql) {
+  return sql
+    .split(';')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+/** Noms + définitions des colonnes d'un CREATE TABLE (découpage
+ *  conscient des parenthèses imbriquées des contraintes). */
+function createTableColumns(stmt) {
+  const open = stmt.indexOf('(')
+  const close = stmt.lastIndexOf(')')
+  if (open < 0 || close <= open) return []
+  const body = stmt.slice(open + 1, close)
+  const parts = []
+  let depth = 0
+  let cur = ''
+  for (const ch of body) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ',' && depth === 0) {
+      parts.push(cur.trim())
+      cur = ''
+    } else {
+      cur += ch
+    }
+  }
+  if (cur.trim()) parts.push(cur.trim())
+  const cols = []
+  for (const p of parts) {
+    const m = p.match(/^"?([A-Za-z0-9_]+)"?\s+([\s\S]*)$/)
+    if (!m) continue
+    const first = m[1]
+    if (/^(CONSTRAINT|PRIMARY|UNIQUE|FOREIGN|CHECK|INDEX|KEY)$/i.test(first)) continue
+    cols.push({ name: first, def: m[2] })
+  }
+  return cols
+}
+
+/** Colonnes listées dans « INSERT INTO "X" (a, b, c) … » */
+function insertColumns(stmt) {
+  const m = stmt.match(/^INSERT INTO\s+"?([A-Za-z0-9_]+)"?\s*\(([^)]*)\)/is)
+  if (!m) return null
+  return m[2].split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
+}
+
+const stmts = splitStatements(diffSql)
+const safeRebuilt = new Set()
+const rebuildProblems = []
+for (const st of stmts) {
+  const drop = st.match(/^DROP TABLE\s+"?([A-Za-z0-9_]+)"?\s*$/i)
+  if (!drop) continue
+  const table = drop[1]
+  const newTable = `"new_${table}"`
+  const create = stmts.find((s) => s.startsWith(`CREATE TABLE ${newTable}`))
+  const insert = stmts.find(
+    (s) => s.startsWith(`INSERT INTO ${newTable}`) && s.includes(`FROM "${table}"`)
+  )
+  const rename = stmts.find((s) => s.includes(`ALTER TABLE ${newTable} RENAME TO "${table}"`))
+  if (!create || !insert || !rename) {
+    rebuildProblems.push(
+      `DROP TABLE "${table}" sans reconstruction complète (CREATE/INSERT/RENAME introuvables)`
+    )
+    continue
+  }
+  const newCols = createTableColumns(create)
+  const copied = insertColumns(insert) ?? []
+  const newNames = new Set(newCols.map((c) => c.name))
+  let ok = true
+  for (const c of copied) {
+    if (!newNames.has(c)) {
+      rebuildProblems.push(
+        `Reconstruction de "${table}" : la colonne recopiée "${c}" disparaît de la nouvelle table (données perdues !)`
+      )
+      ok = false
+    }
+  }
+  for (const c of newCols) {
+    if (copied.includes(c.name)) continue
+    // SQLite DDL : une colonne sans « NOT NULL » est nullable (le mot NULL
+    // n'apparaît pas dans le CREATE pour autant).
+    const nullable = !/NOT\s+NULL/i.test(c.def)
+    const hasDefault = /DEFAULT/i.test(c.def)
+    if (!nullable && !hasDefault) {
+      rebuildProblems.push(
+        `Reconstruction de "${table}" : la nouvelle colonne "${c.name}" est NOT NULL sans valeur par défaut`
+      )
+      ok = false
+    }
+  }
+  if (ok) safeRebuilt.add(table)
+}
+
 const FORBIDDEN = [
   { re: /DROP\s+TABLE/i, label: 'suppression de table' },
   { re: /DROP\s+COLUMN/i, label: 'suppression de colonne' },
   { re: /ALTER\s+COLUMN/i, label: 'modification de type de colonne' },
   { re: /DROP\s+NOT\s+NULL/i, label: 'suppression de contrainte NOT NULL' },
 ]
-for (const { re, label } of FORBIDDEN) {
-  if (re.test(diffSql)) {
-    console.error('')
-    console.error('✘✘✘ OPÉRATION DESTRUCTRICE DÉTECTÉE ✘✘✘')
-    console.error(
-      `Le changement de schéma demandé contient une ${label}. ` +
-        'Par sécurité, il n’est PAS appliqué automatiquement : les données ' +
-        'des enseignants (étudiants, réponses, notes) ne peuvent pas être ' +
-        'modifiées silencieusement lors d’une mise à jour.'
-    )
+for (const st of stmts) {
+  // Les DROP des tables reconstruites (idiome SQLite, données recopiées)
+  // sont autorisés — tout le reste est contrôlé comme avant.
+  const drop = st.match(/^DROP TABLE\s+"?([A-Za-z0-9_]+)"?\s*$/i)
+  if (drop && safeRebuilt.has(drop[1])) continue
+  for (const { re, label } of FORBIDDEN) {
+    if (re.test(st)) {
+      console.error('')
+      console.error('✘✘✘ OPÉRATION DESTRUCTRICE DÉTECTÉE ✘✘✘')
+      console.error(
+        `Le changement de schéma demandé contient une ${label}. ` +
+          'Par sécurité, il n’est PAS appliqué automatiquement : les données ' +
+          'des enseignants (étudiants, réponses, notes) ne peuvent pas être ' +
+          'modifiées silencieusement lors d’une mise à jour.'
+      )
+      if (rebuildProblems.length > 0) {
+        console.error('Détails des reconstructions refusées :')
+        for (const p of rebuildProblems) console.error('  - ' + p)
+      }
     console.error('')
     console.error('→ AVANT de continuer : téléchargez la sauvegarde de la séance ' +
       '(bouton « Sauvegarder » du tableau de bord enseignant) ou exportez vos CSV.')
@@ -138,6 +248,7 @@ for (const { re, label } of FORBIDDEN) {
     console.error('---- SQL refusé ----')
     console.error(diffSql)
     process.exit(1)
+    }
   }
 }
 

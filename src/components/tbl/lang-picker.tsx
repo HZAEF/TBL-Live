@@ -2,7 +2,7 @@
 
 // ============================================================
 // Sélecteur de langue : bouton compact avec drapeau, menu
-// déroulant listant les 7 langues (drapeau + nom natif).
+// déroulant listant les 9 langues (drapeau + nom natif).
 // Drapeaux = petits SVG inline (aucune image à télécharger,
 // rendu identique sur tous les appareils, y compris Windows
 // où les drapeaux emoji ne s'affichent pas).
@@ -61,6 +61,23 @@ const FLAG_FILLERS: Record<Lang, React.ReactNode> = {
       <rect width="20" height="5" fill="#000000" />
       <rect y="5" width="20" height="5" fill="#DD0000" />
       <rect y="10" width="20" height="5" fill="#FFCE00" />
+    </>
+  ),
+  // Italie : vert / blanc / rouge (bandes verticales)
+  it: (
+    <>
+      <rect width="6.67" height="15" fill="#009246" />
+      <rect x="6.67" width="6.67" height="15" fill="#FFFFFF" />
+      <rect x="13.33" width="6.67" height="15" fill="#CE2B37" />
+    </>
+  ),
+  // Turquie : rouge + croissant et étoile blancs
+  tr: (
+    <>
+      <rect width="20" height="15" fill="#E30A17" />
+      <circle cx="8.2" cy="7.5" r="4" fill="#FFFFFF" />
+      <circle cx="9.6" cy="7.5" r="3.3" fill="#E30A17" />
+      <path d={starPath(13.4, 7.5, 2)} fill="#FFFFFF" />
     </>
   ),
   // Chine : rouge + étoile jaune

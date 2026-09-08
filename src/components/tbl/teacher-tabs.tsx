@@ -1,7 +1,24 @@
 'use client'
 
-import { useState } from 'react'
-import { Check, Download, Plus, Save, ShieldAlert, Trash2, Users, Wand2, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Dices,
+  Download,
+  KeyRound,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+  ShieldAlert,
+  Trash2,
+  Users,
+  Wand2,
+  Wifi,
+  X,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,8 +34,26 @@ import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import { t, useI18n, formatDate } from '@/lib/i18n'
 import type { DashboardDTO } from '@/lib/tbl-types'
+import { LETTERS } from '@/lib/tbl-types'
 import { gradeForStudent, fmtNote } from '@/lib/grades'
 import { SAI_SUBSCALES, SAI_SUBSCALE_INFO, saiItemText } from '@/lib/sai'
+import {
+  analyzeSection,
+  buildIratSection,
+  buildTratSection,
+  buildApplicationSection,
+  buildComparison,
+  flagQuestions,
+  alphaInterp,
+  difficultyInterp,
+  discriminationInterp,
+  type SectionAnalysis,
+  type ComparisonRow,
+  type FlaggedQuestion,
+} from '@/lib/docimology'
+import { api } from '@/lib/tbl-client'
+import { loadAppConfig } from '@/lib/app-config'
+import { buildXlsx, downloadBlob } from '@/lib/xlsx-writer'
 import { choiceLetter } from './shared'
 import { QuestionEditor, emptyQuestion } from './question-editor'
 import type { DraftQuestion } from '@/lib/tbl-types'
@@ -251,12 +286,21 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
 
       {/* --- Questions iRAT / tRAT --- */}
       <section className="space-y-3">
-        <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
-          <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-white">
-            iRAT / tRAT
-          </span>
-          {t('{n} question(s) de préparation', { n: ratQs.length })}
-        </h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
+            <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-xs font-bold text-white">
+              iRAT / tRAT
+            </span>
+            {t('{n} question(s) de préparation', { n: ratQs.length })}
+          </h3>
+          {/* v2.9.0 — « Aléatoire » : mélange questions + réponses. */}
+          <ShuffleButton
+            manage={manage}
+            scope="rat"
+            count={ratQs.length}
+            label={t('Mélanger au hasard les questions et les réponses')}
+          />
+        </div>
         {ratQs.length === 0 && (
           <p className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/50 p-4 text-center text-sm text-stone-500">
             {t(
@@ -265,7 +309,17 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
           </p>
         )}
         {ratQs.map((q, i) => (
-          <ExistingQuestionEditor key={q.id} index={i} question={q} manage={manage} />
+          <ExistingQuestionEditor
+            key={q.id}
+            index={i}
+            question={q}
+            manage={manage}
+            onMove={
+              ratQs.length > 1
+                ? (direction) => manage('move_question', { id: q.id, direction })
+                : undefined
+            }
+          />
         ))}
       </section>
 
@@ -325,7 +379,18 @@ export function QuestionsTab({ data, manage }: { data: DashboardDTO; manage: Man
               )}
             </p>
             {freeAppQs.map((q, i) => (
-              <ExistingQuestionEditor key={q.id} index={i} question={q} manage={manage} prefix="Exercice" />
+              <ExistingQuestionEditor
+                key={q.id}
+                index={i}
+                question={q}
+                manage={manage}
+                prefix="Exercice"
+                onMove={
+                  freeAppQs.length > 1
+                    ? (direction) => manage('move_question', { id: q.id, direction })
+                    : undefined
+                }
+              />
             ))}
           </div>
         )}
@@ -454,8 +519,23 @@ function CaseEditor({
           question={q}
           manage={manage}
           prefix="QCU"
+          onMove={
+            questions.length > 1
+              ? (direction) => manage('move_question', { id: q.id, direction })
+              : undefined
+          }
         />
       ))}
+
+      {/* v2.9.0 — Mélanger les QCU du cas (et leurs réponses). */}
+      {questions.length >= 2 && (
+        <ShuffleButton
+          manage={manage}
+          scope={kase.id}
+          count={questions.length}
+          label={t('Mélanger au hasard les QCU de ce cas et leurs réponses')}
+        />
+      )}
 
       {newQ ? (
         <div className="space-y-2 rounded-xl border border-lime-300 bg-white p-2">
@@ -504,12 +584,16 @@ function ExistingQuestionEditor({
   manage,
   prefix,
   hidePhaseToggle = false,
+  onMove,
 }: {
   index: number
   question: DashboardDTO['questions'][number]
   manage: ManageFn
   prefix?: string
   hidePhaseToggle?: boolean
+  /** v2.9.0 — déplacer la question dans sa liste (flèches ↑ / ↓).
+   *  Absent = liste non réordonnable. */
+  onMove?: (direction: -1 | 1) => void
 }) {
   const [draft, setDraft] = useState<DraftQuestion>({
     text: question.text,
@@ -524,34 +608,108 @@ function ExistingQuestionEditor({
     draft.correct !== question.correct ||
     draft.phase !== question.phase
   return (
-    <div className="space-y-2">
-      <QuestionEditor
-        index={index}
-        value={draft}
-        onChange={setDraft}
-        hidePhaseToggle={hidePhaseToggle || question.caseId !== null}
-        prefix={prefix ?? (question.phase === 'application' ? 'Exercice' : 'Question')}
-        onDelete={() => {
-          if (
-            window.confirm(
-              t('Supprimer cette question ? Ses réponses seront aussi supprimées.')
-            )
-          ) {
-            manage('delete_question', { id: question.id })
-          }
-        }}
-      />
-      {dirty && (
-        <Button
-          size="sm"
-          className="h-9 w-full bg-emerald-600 hover:bg-emerald-700"
-          onClick={() => manage('update_question', { id: question.id, question: draft })}
-        >
-          <Save className="mr-1.5 h-4 w-4" />
-          {t('Enregistrer les modifications')}
-        </Button>
+    <div className="flex items-start gap-1.5">
+      {/* v2.9.0 — Réordonnancement : monter / descendre la question
+          dans SA liste (iRAT/tRAT, QCU du cas, exercices libres). */}
+      {onMove && (
+        <div className="flex flex-col gap-1 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 border-stone-300 text-stone-500 hover:bg-stone-50"
+            onClick={() => onMove(-1)}
+            disabled={index === 0}
+            aria-label={t('Monter la question')}
+            title={t('Monter la question')}
+          >
+            <ArrowUp className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-8 w-8 border-stone-300 text-stone-500 hover:bg-stone-50"
+            onClick={() => onMove(1)}
+            disabled={false}
+            aria-label={t('Descendre la question')}
+            title={t('Descendre la question')}
+          >
+            <ArrowDown className="h-4 w-4" />
+          </Button>
+        </div>
       )}
+      <div className="min-w-0 flex-1 space-y-2">
+        <QuestionEditor
+          index={index}
+          value={draft}
+          onChange={setDraft}
+          hidePhaseToggle={hidePhaseToggle || question.caseId !== null}
+          prefix={prefix ?? (question.phase === 'application' ? 'Exercice' : 'Question')}
+          onDelete={() => {
+            if (
+              window.confirm(
+                t('Supprimer cette question ? Ses réponses seront aussi supprimées.')
+              )
+            ) {
+              manage('delete_question', { id: question.id })
+            }
+          }}
+        />
+        {dirty && (
+          <Button
+            size="sm"
+            className="h-9 w-full bg-emerald-600 hover:bg-emerald-700"
+            onClick={() => manage('update_question', { id: question.id, question: draft })}
+          >
+            <Save className="mr-1.5 h-4 w-4" />
+            {t('Enregistrer les modifications')}
+          </Button>
+        )}
+      </div>
     </div>
+  )
+}
+
+// v2.9.0 — Bouton « Aléatoire » : mélange au hasard les questions du
+// groupe ET les réponses de chaque question. Les réponses déjà
+// enregistrées suivent leur texte (remappage serveur) : les résultats
+// restent exacts même si le mélange a lieu pendant la séance.
+function ShuffleButton({
+  manage,
+  scope,
+  count,
+  label,
+}: {
+  manage: ManageFn
+  scope: string
+  count: number
+  label: string
+}) {
+  const { t } = useI18n()
+  if (count < 2) return null
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-8 border-stone-300 text-stone-600 hover:bg-stone-50"
+      onClick={() => {
+        if (
+          window.confirm(
+            t(
+              'Mélanger au hasard les {n} questions et leurs réponses ? L’ordre actuel sera remplacé (les résultats déjà enregistrés suivent leur texte, rien n’est perdu).',
+              { n: count }
+            )
+          )
+        ) {
+          manage('shuffle_quiz', { scope })
+        }
+      }}
+      title={label}
+    >
+      <Dices className="mr-1 h-3.5 w-3.5" />
+      {t('Aléatoire')}
+    </Button>
   )
 }
 
@@ -1480,9 +1638,395 @@ export function QuestionnaireTab({
                 </div>
               )}
             </div>
+
+            {/* v2.7.0 : export CSV du questionnaire — DANS sa rubrique
+                dédiée (comme les résultats et la docimologie). */}
+            {stats.completed > 0 && (
+              <Button
+                variant="outline"
+                className="h-11 w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => exportQuestionnaireCsv(data)}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {t('Exporter le questionnaire (CSV pour Excel)')}
+              </Button>
+            )}
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// ================= Onglet CONFIGURATIONS (v2.7.0) =================
+
+// Réglages de synchronisation mémorisés sur l'ordinateur de l'enseignant
+// (une adresse par séance) : adresse de la version en ligne + synchro
+// automatique toutes les 5 secondes (v2.8.2) et à chaque action de
+// l'enseignant pendant que le tableau de bord est ouvert. Voir la
+// section « Synchronisation » ci-dessous.
+export interface SyncConfig {
+  url: string
+  auto: boolean
+}
+
+export function readSyncConfig(code: string): SyncConfig | null {
+  try {
+    const raw = window.localStorage.getItem('tbl_sync_settings')
+    if (!raw) return null
+    const all = JSON.parse(raw) as Record<string, SyncConfig>
+    const cfg = all[code]
+    if (cfg && typeof cfg.url === 'string' && cfg.url.length > 0) return cfg
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function writeSyncConfig(code: string, cfg: SyncConfig | null) {
+  try {
+    const raw = window.localStorage.getItem('tbl_sync_settings')
+    const all = raw ? (JSON.parse(raw) as Record<string, SyncConfig>) : {}
+    if (cfg) all[code] = cfg
+    else delete all[code]
+    window.localStorage.setItem('tbl_sync_settings', JSON.stringify(all))
+  } catch {
+    // stockage indisponible : réglage non mémorisé, sans erreur
+  }
+}
+
+export function ConfigurationsTab({
+  data,
+  manage,
+  token,
+  refresh,
+}: {
+  data: DashboardDTO
+  manage: ManageFn
+  token: string
+  refresh: () => Promise<unknown>
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [title, setTitle] = useState(data.session.title)
+  const [pin, setPin] = useState('')
+  const [pin2, setPin2] = useState('')
+  const [savingTitle, setSavingTitle] = useState(false)
+  const [savingPin, setSavingPin] = useState(false)
+  const [minutes, setMinutes] = useState(String(data.session.iratMinutes))
+  const [savingMinutes, setSavingMinutes] = useState(false)
+  const [syncUrl, setSyncUrl] = useState(() => readSyncConfig(data.session.code)?.url ?? '')
+  const [autoSync, setAutoSync] = useState(() => readSyncConfig(data.session.code)?.auto ?? false)
+  const [syncing, setSyncing] = useState(false)
+  const [excludeId, setExcludeId] = useState<string | null>(null)
+  // v2.9.0 : délai du cycle de synchronisation — réglable dans
+  // l'espace administrateur (/admin), affiché ici en secondes.
+  const [syncSeconds, setSyncSeconds] = useState(5)
+  useEffect(() => {
+    loadAppConfig().then((c) => setSyncSeconds(Math.round(c.syncIntervalMs / 1000)))
+  }, [])
+
+  const saveSync = (url: string, auto: boolean) => {
+    setSyncUrl(url)
+    setAutoSync(auto)
+    if (url.trim()) writeSyncConfig(data.session.code, { url: url.trim(), auto })
+    else writeSyncConfig(data.session.code, null)
+  }
+
+  // v2.8.1 : les boutons « Sauvegarder » (en-tête du tableau de bord,
+  // à côté de « Dupliquer ») et « Téléverser une séance » (écran
+  // d'accueil enseignant) ne vivent plus dans cet onglet — l'enseignante
+  // l'a demandé : chaque chose à sa place, la rubrique Configurations
+  // ne garde que les réglages (titre, durée, PIN, exclusion,
+  // synchronisation).
+
+  const doSync = async () => {
+    if (!syncUrl.trim() || syncing) return
+    setSyncing(true)
+    try {
+      const res = await api<{ pulled: { answersInserted: number } | null }>(
+        `/api/sessions/${data.session.code}/manage`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ token, action: 'sync_now', remoteUrl: syncUrl.trim() }),
+        }
+      )
+      toast({
+        title: t('Synchronisation réussie'),
+        description: res.pulled
+          ? t('Contributions distantes fusionnées puis état complet envoyé à la version en ligne.')
+          : t('Séance envoyée à la version en ligne (aucune contribution distante en attente).'),
+      })
+      await refresh()
+    } catch (e) {
+      toast({
+        title: t('Synchronisation impossible'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
+        variant: 'destructive',
+      })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* ---- Paramètres de la séance ---- */}
+      <section className="space-y-4 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">{t('Paramètres de la séance')}</p>
+          <p className="mt-0.5 text-xs text-stone-500">
+            {t(
+              'Titre, durée et code PIN. Les questions et le questionnaire se modifient dans leurs onglets dédiés.'
+            )}
+          </p>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+          <div>
+            <Label htmlFor="cfg-title">{t('Titre de la séance')}</Label>
+            <Input
+              id="cfg-title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              maxLength={120}
+              className="mt-1.5 h-11"
+            />
+          </div>
+          <Button
+            className="h-11 bg-emerald-600 hover:bg-emerald-700"
+            disabled={savingTitle || title.trim() === data.session.title || title.trim().length < 2}
+            onClick={async () => {
+              setSavingTitle(true)
+              await manage('set_title', { title: title.trim() })
+              setSavingTitle(false)
+            }}
+          >
+            {savingTitle ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Save className="mr-1 h-4 w-4" />}
+            {t('Enregistrer')}
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor="cfg-minutes" className="text-sm">
+            {t('Durée conseillée du iRAT :')}
+          </Label>
+          <Input
+            id="cfg-minutes"
+            type="number"
+            min={1}
+            max={90}
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+            className="h-10 w-20 text-center"
+          />
+          <span className="text-sm text-stone-500">{t('min')}</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-10 border-stone-300"
+            disabled={
+              savingMinutes ||
+              !Number.isInteger(Number(minutes)) ||
+              Number(minutes) === data.session.iratMinutes ||
+              Number(minutes) < 1 ||
+              Number(minutes) > 90
+            }
+            onClick={async () => {
+              setSavingMinutes(true)
+              await manage('set_irat_minutes', { minutes: Number(minutes) })
+              setSavingMinutes(false)
+            }}
+          >
+            {t('Enregistrer')}
+          </Button>
+        </div>
+
+        <div className="grid gap-2 border-t border-stone-100 pt-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Label className="flex items-center gap-1.5 text-sm">
+              <KeyRound className="h-4 w-4 text-emerald-600" />
+              {t('Changer le code PIN enseignant')}
+            </Label>
+            <p className="mt-0.5 text-xs text-stone-500">
+              {t('Notez-le : il sert à rouvrir cette séance. 6 à 12 caractères, chiffres et lettres.')}
+            </p>
+          </div>
+          <Input
+            value={pin}
+            onChange={(e) => setPin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
+            placeholder="ex. 7KQ2MP"
+            autoCapitalize="characters"
+            className="mt-1.5 h-11 font-mono tracking-widest"
+            aria-label={t('Nouveau code PIN')}
+          />
+          <Input
+            value={pin2}
+            onChange={(e) => setPin2(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12))}
+            placeholder={t('confirmez le PIN')}
+            autoCapitalize="characters"
+            className="mt-1.5 h-11 font-mono tracking-widest"
+            aria-label={t('Confirmez le nouveau code PIN')}
+          />
+          <div className="sm:col-span-2">
+            <Button
+              className="h-11 bg-emerald-600 hover:bg-emerald-700"
+              disabled={
+                savingPin ||
+                pin.length < 6 ||
+                pin !== pin2
+              }
+              onClick={async () => {
+                setSavingPin(true)
+                const ok = await manage('set_pin', { pin })
+                setSavingPin(false)
+                if (ok) {
+                  setPin('')
+                  setPin2('')
+                  toast({ title: t('Code PIN modifié.') })
+                }
+              }}
+            >
+              {savingPin ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1 h-4 w-4" />}
+              {t('Changer le PIN')}
+            </Button>
+            {pin.length > 0 && pin !== pin2 && (
+              <p className="mt-1.5 text-xs text-red-600">{t('Les deux PIN ne correspondent pas.')}</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* ---- Exclure un étudiant ---- */}
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">{t('Exclure un étudiant de la séance')}</p>
+          <p className="mt-0.5 text-xs text-stone-500">
+            {t(
+              'L’étudiant perd immédiatement l’accès à la séance (appareil déconnecté). Ses réponses déjà enregistrées sont supprimées.'
+            )}
+          </p>
+        </div>
+        {data.students.length === 0 ? (
+          <p className="text-sm text-stone-500">{t('Aucun étudiant inscrit.')}</p>
+        ) : (
+          <div className="max-h-56 space-y-1.5 overflow-y-auto">
+            {data.students.map((s) => (
+              <div
+                key={s.id}
+                className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm"
+              >
+                <span className="min-w-0 truncate text-stone-800">
+                  {s.name}
+                  <span className="ml-2 text-xs text-stone-500">
+                    {data.teams.find((tm) => tm.id === s.teamId)?.name ?? t('sans équipe')}
+                  </span>
+                </span>
+                {excludeId === s.id ? (
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 px-2 text-xs"
+                      onClick={() => setExcludeId(null)}
+                    >
+                      {t('Annuler')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-8 bg-red-600 px-3 text-xs hover:bg-red-700"
+                      onClick={async () => {
+                        const ok = await manage('remove_student', { studentId: s.id })
+                        if (ok) setExcludeId(null)
+                      }}
+                    >
+                      {t('Confirmer l’exclusion')}
+                    </Button>
+                  </span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 shrink-0 border-red-200 px-3 text-xs text-red-600 hover:bg-red-50"
+                    onClick={() => setExcludeId(s.id)}
+                  >
+                    {t('Exclure')}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ---- Synchronisation Internet ↔ réseau local ---- */}
+      <section className="space-y-3 rounded-2xl border-2 border-sky-200 bg-sky-50/50 p-4">
+        <div>
+          <p className="flex items-center gap-1.5 text-sm font-bold text-stone-900">
+            <Wifi className="h-4 w-4 text-sky-600" />
+            {t('Synchronisation Internet ↔ réseau local')}
+          </p>
+          <p className="mt-0.5 text-xs leading-relaxed text-stone-600">
+            {t(
+              'Si la séance est aussi servie par une autre version de l’application (version en ligne Vercel pendant que vous utilisez le réseau local, ou l’inverse), indiquez son adresse : cet ordinateur tire les réponses des étudiants connectés à l’autre version, fusionne tout, puis renvoie l’état complet. Aucun doublon, aucun conflit — et en cas de coupure réseau, la séance continue : relancez la synchronisation plus tard.'
+            )}
+          </p>
+          {/* v2.8.2 : la synchronisation est devenue quasi immédiate —
+              conseil d'usage : UN SEUL tableau de bord (celui-ci), les
+              étudiants rejoignent l'une ou l'autre adresse. */}
+          <p className="mt-1.5 rounded-xl bg-white/80 px-3 py-2 text-xs leading-relaxed text-sky-900">
+            {t(
+              'Synchronisation quasi immédiate : vos actions partent tout de suite et les contributions des étudiants arrivent en quelques secondes. Gardez ce tableau de bord ouvert sur cet ordinateur — c’est lui qui fait tourner la synchronisation. N’ouvrez pas en même temps le tableau de bord de la version en ligne : un seul « chef d’orchestre » à la fois.'
+            )}
+          </p>
+        </div>
+        <div>
+          <Label htmlFor="cfg-sync-url">{t('Adresse de la version en ligne')}</Label>
+          <Input
+            id="cfg-sync-url"
+            type="url"
+            inputMode="url"
+            value={syncUrl}
+            onChange={(e) => saveSync(e.target.value, autoSync)}
+            placeholder="https://votre-application.vercel.app"
+            className="mt-1.5 h-11"
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-stone-700">
+          <input
+            type="checkbox"
+            checked={autoSync}
+            onChange={(e) => saveSync(syncUrl, e.target.checked)}
+            disabled={!syncUrl.trim()}
+            className="h-4 w-4 accent-emerald-600"
+          />
+          {t(
+            'Synchroniser automatiquement (toutes les {s} secondes et à chacune de vos actions, pendant que ce tableau de bord est ouvert)',
+            { s: syncSeconds }
+          )}
+        </label>
+        <p className="-mt-1 pl-6 text-xs text-stone-500">
+          {t('Ce délai se règle dans l’espace administrateur de l’application.')}
+        </p>
+        <Button
+          className="h-11 w-full bg-sky-600 hover:bg-sky-700"
+          disabled={!syncUrl.trim() || syncing}
+          onClick={doSync}
+        >
+          {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+          {t('Synchroniser maintenant')}
+        </Button>
+        {data.session.syncedAt && (
+          <p className="text-center text-xs text-stone-500">
+            {t('Dernière synchronisation réussie : {date}', {
+              date: formatDate(new Date(data.session.syncedAt), {
+                dateStyle: 'short',
+                timeStyle: 'medium',
+              }),
+            })}
+          </p>
+        )}
+      </section>
     </div>
   )
 }
@@ -1614,25 +2158,31 @@ function SaiItemEditor({
   )
 }
 
-// ================= Export CSV =================
 
-export function exportCsv(
+// ================= Exports : matrices partagées CSV + Excel =================
+//
+// v2.7.0 : chaque rubrique garde SON export CSV (Résultats, Docimologie,
+// Questionnaire) et l'onglet « Terminé » du déroulé exporte un classeur
+// Excel UNIQUE à 3 feuilles (Résultats / Docimologie / Questionnaire).
+// Les trois exports partagent les mêmes matrices de données, construites
+// ici une seule fois — aucune divergence possible entre le CSV et l'Excel.
+
+type Cell = string | number | null | undefined
+
+export interface MatrixResult {
+  rows: Cell[][]
+  /** Index des lignes d'en-tête (gras + fond dans l'Excel) */
+  boldRows: number[]
+}
+
+/** Matrice 1 : résultats par étudiant + réclamations + commentaires des pairs. */
+export function buildResultsMatrix(
   data: DashboardDTO,
   ratQs: DashboardDTO['questions'],
   appQs: DashboardDTO['questions']
-) {
-  const esc = (v: string | number | null | undefined) => {
-    let s = String(v ?? '')
-    // Anti « CSV injection » : un texte libre saisi par un étudiant (nom,
-    // justification, commentaire) qui commencerait par =, +, -, @, une
-    // tabulation ou un retour chariot pourrait être interprété comme une
-    // formule par Excel. On le neutralise d’une apostrophe initiale.
-    if (/^[=+\-@\t\r]/.test(s)) {
-      s = "'" + s
-    }
-    return `"${s.replace(/"/g, '""')}"`
-  }
-  const rows: string[] = []
+): MatrixResult {
+  const rows: Cell[][] = []
+  const boldRows: number[] = [0]
 
   // Tableau 1 : résultats par étudiant
   // NB : les scores s'écrivent « 10 sur 10 » (et non « 10/10 ») pour éviter
@@ -1646,26 +2196,22 @@ export function exportCsv(
         }`
       : `${t('Exercice')} ex.${i + 1}`
   }
-  rows.push(
-    [
-      t('Étudiant'),
-      t('Équipe'),
-      ...ratQs.map((_, i) => `iRAT Q${i + 1}`),
-      t('iRAT total (sur {n})', { n: ratQs.length }),
-      t('tRAT équipe (total sur {n})', { n: ratQs.length * 4 }),
-      ...appQs.map((q, i) => appColumnLabel(q, i)),
-      t('Note pairs (moyenne sur 5)'),
-      t('iRAT sur 20 (25%)'),
-      t('tRAT sur 20 (25%)'),
-      t('Application sur 20 (35%)'),
-      t('Pairs sur 20 (15%)'),
-      t('NOTE FINALE sur 20'),
-    ]
-      .map(esc)
-      .join(';')
-  )
+  rows.push([
+    t('Étudiant'),
+    t('Équipe'),
+    ...ratQs.map((_, i) => `iRAT Q${i + 1}`),
+    t('iRAT total (sur {n})', { n: ratQs.length }),
+    t('tRAT équipe (total sur {n})', { n: ratQs.length * 4 }),
+    ...appQs.map((q, i) => appColumnLabel(q, i)),
+    t('Note pairs (moyenne sur 5)'),
+    t('iRAT sur 20 (25%)'),
+    t('tRAT sur 20 (25%)'),
+    t('Application sur 20 (35%)'),
+    t('Pairs sur 20 (15%)'),
+    t('NOTE FINALE sur 20'),
+  ])
   for (const s of data.students) {
-    const team = data.teams.find((t) => t.id === s.teamId)
+    const team = data.teams.find((tm) => tm.id === s.teamId)
     const iratCells = ratQs.map((q) => {
       const a = data.iratAnswers.find((x) => x.questionId === q.id && x.studentId === s.id)
       return a ? (a.isCorrect ? '✓' : choiceLetter(a.choice)) : ''
@@ -1677,105 +2223,426 @@ export function exportCsv(
       ? data.tratAnswers.filter((a) => a.teamId === team.id).reduce((sum, a) => sum + a.score, 0)
       : 0
     const appCells = appQs.map((q) => {
-      const a = team
-        ? data.appAnswers.find((x) => x.questionId === q.id && x.teamId === team.id)
-        : null
+      const a = team ? data.appAnswers.find((x) => x.questionId === q.id && x.teamId === team.id) : null
       return a ? choiceLetter(a.choice) : ''
     })
     const received = data.peerEvals.filter((e) => e.evaluatedId === s.id)
     const peerAvg =
       received.length > 0
-        ? (received.reduce((sum, e) => sum + e.score, 0) / received.length).toFixed(1)
-        : ''
-    // Notes finales sur 20 (avec virgule décimale, Excel FR)
+        ? Math.round((received.reduce((sum, e) => sum + e.score, 0) / received.length) * 10) / 10
+        : null
+    // Notes finales sur 20 (nombres — l'Excel affiche la virgule selon la
+    // langue de l'ordinateur, le CSV l'écrit à la française)
     const g = gradeForStudent(data, s.id)
     const cells = [g.irat, g.trat, g.application, g.peer].map((c) =>
-      c.note === null ? '' : c.note.toFixed(2).replace('.', ',')
+      c.note === null ? null : Math.round(c.note * 100) / 100
     )
-    const finalCell = g.final === null ? '' : g.final.toFixed(2).replace('.', ',')
-    rows.push(
-      [
-        s.name,
-        team?.name ?? '',
-        ...iratCells,
-        t('{n} sur {m}', { n: iratTotal, m: ratQs.length }),
-        t('{n} sur {m}', { n: tratTotal, m: ratQs.length * 4 }),
-        ...appCells,
-        peerAvg,
-        ...cells,
-        finalCell,
-      ]
-        .map(esc)
-        .join(';')
-    )
+    const finalCell = g.final === null ? null : Math.round(g.final * 100) / 100
+    rows.push([
+      s.name,
+      team?.name ?? '',
+      ...iratCells,
+      t('{n} sur {m}', { n: iratTotal, m: ratQs.length }),
+      t('{n} sur {m}', { n: tratTotal, m: ratQs.length * 4 }),
+      ...appCells,
+      peerAvg,
+      ...cells,
+      finalCell,
+    ])
   }
-
-  rows.push('')
 
   // Tableau 2 : réclamations
   if (data.appeals.length > 0) {
-    rows.push(
-      [t('Réclamations'), t('Équipe'), t('Question'), t('Justification'), t('Décision')]
-        .map(esc)
-        .join(';')
-    )
+    rows.push([])
+    boldRows.push(rows.length)
+    rows.push([t('Réclamations'), t('Équipe'), t('Question'), t('Justification'), t('Décision')])
     for (const a of data.appeals) {
       const team = data.teams.find((tm) => tm.id === a.teamId)
       const q = data.questions.find((x) => x.id === a.questionId)
-      rows.push(
-        [
-          '',
-          team?.name ?? '',
-          q?.text ?? '',
-          a.text,
-          a.status === 'accepted'
-            ? t('Acceptée')
-            : a.status === 'rejected'
-              ? t('Refusée')
-              : t('En attente'),
-        ]
-          .map(esc)
-          .join(';')
-      )
+      rows.push([
+        '',
+        team?.name ?? '',
+        q?.text ?? '',
+        a.text,
+        a.status === 'accepted'
+          ? t('Acceptée')
+          : a.status === 'rejected'
+            ? t('Refusée')
+            : t('En attente'),
+      ])
     }
-    rows.push('')
   }
 
   // Tableau 3 : commentaires des pairs
   const withComments = data.peerEvals.filter((e) => e.comment)
   if (withComments.length > 0) {
-    rows.push(
-      [
-        t('Évaluation par les pairs'),
-        t('Évaluateur'),
-        t('Évalué'),
-        t('Note'),
-        t('Commentaire'),
-      ]
-        .map(esc)
-        .join(';')
-    )
+    rows.push([])
+    boldRows.push(rows.length)
+    rows.push([t('Évaluation par les pairs'), t('Évaluateur'), t('Évalué'), t('Note'), t('Commentaire')])
     for (const e of withComments) {
-      rows.push(
-        [
-          '',
-          data.students.find((s) => s.id === e.evaluatorId)?.name ?? '',
-          data.students.find((s) => s.id === e.evaluatedId)?.name ?? '',
-          String(e.score),
-          e.comment ?? '',
-        ]
-          .map(esc)
-          .join(';')
-      )
+      rows.push([
+        '',
+        data.students.find((s) => s.id === e.evaluatorId)?.name ?? '',
+        data.students.find((s) => s.id === e.evaluatedId)?.name ?? '',
+        e.score,
+        e.comment ?? '',
+      ])
     }
   }
 
-  // BOM UTF-8 pour Excel + séparateur « ; » (Excel francophone)
-  const blob = new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `resultats-tbl-${data.session.code}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  return { rows, boldRows }
+}
+
+/** Matrice 3 : questionnaire de fin de séance (synthèse + réponses détaillées). */
+export function buildQuestionnaireMatrix(data: DashboardDTO): MatrixResult {
+  const rows: Cell[][] = []
+  const boldRows: number[] = [0]
+  const items = data.saiItems
+  const statsByItem = new Map((data.saiStats?.items ?? []).map((s) => [s.id, s]))
+  const respByStudent = new Map<string, Map<string, number>>()
+  for (const r of data.saiResponses ?? []) {
+    if (!respByStudent.has(r.studentId)) respByStudent.set(r.studentId, new Map())
+    respByStudent.get(r.studentId)!.set(r.itemId, r.value)
+  }
+  const commentsByName = new Map(
+    (data.saiStats?.comments ?? []).map((c) => [c.studentName, c.comment])
+  )
+
+  // Section 1 : synthèse par item
+  rows.push([
+    t('N°'),
+    t('Sous-échelle'),
+    t('Item'),
+    t('Inversé'),
+    t('Réponses'),
+    t('Moyenne (1 à 5)'),
+  ])
+  items.forEach((it, i) => {
+    const st = statsByItem.get(it.id)
+    rows.push([
+      i + 1,
+      t(SAI_SUBSCALE_INFO[it.subscale].labelKey),
+      saiItemText(it),
+      it.reversed ? t('oui') : '',
+      st?.n ?? 0,
+      st && st.n > 0 ? Math.round(st.mean * 100) / 100 : null,
+    ])
+  })
+
+  // Section 2 : réponses détaillées (matrice étudiant × item)
+  rows.push([])
+  boldRows.push(rows.length)
+  rows.push([
+    t('Étudiant'),
+    t('Équipe'),
+    ...items.map((_, i) => `I${i + 1}`),
+    t('Complété le'),
+    t('Commentaire'),
+  ])
+  for (const s of data.students) {
+    const mine = respByStudent.get(s.id)
+    rows.push([
+      s.name,
+      data.teams.find((tm) => tm.id === s.teamId)?.name ?? '',
+      ...items.map((it) => (mine ? (mine.get(it.id) ?? null) : null)),
+      s.saiCompletedAt ? formatDate(new Date(s.saiCompletedAt)) : '',
+      commentsByName.get(s.name) ?? '',
+    ])
+  }
+  return { rows, boldRows }
+}
+
+/** Matrice 2 : analyse docimologique complète (mêmes calculs que l'onglet Statistiques). */
+export function buildDocimologyMatrix(
+  data: DashboardDTO,
+  irat: SectionAnalysis | null,
+  trat: SectionAnalysis | null,
+  app: SectionAnalysis | null,
+  comparison: ComparisonRow[] | null,
+  flagged: FlaggedQuestion[]
+): MatrixResult {
+  const rows: Cell[][] = []
+  const boldRows: number[] = []
+  const line = (...cells: Cell[]) => rows.push(cells)
+  /** nombre décimal arrondi (null si non calculable) */
+  const nb = (x: number | null, decimals = 2): number | null =>
+    x === null || !Number.isFinite(x) ? null : Math.round(x * 10 ** decimals) / 10 ** decimals
+  /** pourcentage (0-100, 1 décimale) */
+  const pc = (x: number | null): number | null =>
+    x === null ? null : Math.round(x * 1000) / 10
+
+  // Libellés composés « Application 2 Q3 » → mot Application traduit
+  const fmtQLabel = (label: string): string =>
+    label
+      .replace(/^Application ex\.(\d+)$/, (_m, n) => `${t('Exercice')} ${n}`)
+      .replace(/^Application (\d+) Q(\d+)$/, (_m, a, q) => `${t('Application')} ${a} Q${q}`)
+
+  line(`STATISTIQUES DOCIMOLOGIQUES — ${data.session.title} (code ${data.session.code})`)
+  line(
+    t('Exporté le {date} — phase : {phase} — {n} étudiant(s), {m} équipe(s)', {
+      date: formatDate(new Date(), {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }),
+      phase: data.session.status,
+      n: data.students.length,
+      m: data.teams.length,
+    })
+  )
+  rows.push([])
+
+  // ---- 1. Synthèse par section ----
+  boldRows.push(rows.length)
+  line(t('1. SYNTHÈSE PAR SECTION'))
+  boldRows.push(rows.length)
+  line(
+    t('Section'), t('Répondants'), t('Questions'), t('Score max'), t('Moyenne (points)'),
+    t('Écart-type'), t('Moyenne /20'), t('Médiane (points)'), 'Q1', 'Q3', 'Min', 'Max',
+    t('Fidélité (alpha)'), t('Interprétation fidélité'), t('SEM (points)'), t('Répondants complets')
+  )
+  const sections: [string, SectionAnalysis | null][] = [
+    [t('iRAT (individuel)'), irat],
+    [t('tRAT (équipes)'), trat],
+    [t('Application (équipes)'), app],
+  ]
+  for (const [label, a] of sections) {
+    if (!a) continue
+    const tst = a.test
+    line(
+      label, tst.n, tst.k, tst.maxScore, nb(tst.mean), nb(tst.sd), nb(tst.mean20, 1),
+      nb(tst.median), nb(tst.q1), nb(tst.q3), tst.min, tst.max, nb(tst.alpha),
+      tst.alpha !== null ? t(alphaInterp(tst.alpha).label) : '', nb(tst.sem), tst.nComplete
+    )
+  }
+  rows.push([])
+
+  // ---- 2. Analyse des questions ----
+  const itemRows = (kindLabel: string, a: SectionAnalysis, isTrat: boolean, isApp: boolean) => {
+    boldRows.push(rows.length)
+    line(`2. ${t('ANALYSE DES QUESTIONS')} — ${kindLabel}`)
+    boldRows.push(rows.length)
+    const header = isTrat
+      ? [
+          t('Question'), t('Intitulé'), t('Équipes'), t('Réussite 1er essai (%)'), t('Réussite finale (%)'),
+          t('Points moyens (sur 4)'), t('Équipes à 4 pts'), t('à 2 pts'), t('à 1 pt'), t('à 0 pt'),
+          t('Indice de discrimination (D)'), t('Interprétation D'), t('r point-bisériale'),
+        ]
+      : [
+          ...(isApp ? [t('Cas')] : []), t('Question'), t('Intitulé'), t('Répondants'),
+          ...(isApp ? [t('Bonnes réponses')] : []), t('Indice de difficulté (p)'),
+          t('Interprétation difficulté'), t('Indice de discrimination (D)'), t('Interprétation D'),
+          t('r point-bisériale'),
+        ]
+    const optHeader = LETTERS.map((l) => `${t('Choix')} ${l} (%)`)
+    line(...header, ...optHeader, ...(isTrat ? [] : [t('Sans réponse')]))
+    for (const it of a.items) {
+      const optByIndex = new Map(it.options.map((o) => [o.index, o]))
+      const optCells = Array.from({ length: 6 }, (_, i) => pc(optByIndex.get(i)?.pct ?? null))
+      const base = isApp
+        ? [fmtQLabel(it.question.caseLabel ?? ''), fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
+        : isTrat
+          ? [fmtQLabel(it.question.label), it.question.text, it.n]
+          : [fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
+      const stats = isTrat
+        ? [
+            pc(it.pFirst), pc(it.p), nb(it.avgScore),
+            it.ifat?.c4 ?? '', it.ifat?.c2 ?? '', it.ifat?.c1 ?? '', it.ifat?.c0 ?? '',
+            nb(it.d),
+            it.d !== null ? t(discriminationInterp(it.d).label) : '',
+            nb(it.rpbs),
+          ]
+        : [
+            pc(it.p),
+            it.p !== null ? t(difficultyInterp(it.p).label) : '',
+            nb(it.d),
+            it.d !== null ? t(discriminationInterp(it.d).label) : '',
+            nb(it.rpbs),
+          ]
+      line(...base, ...stats, ...optCells, ...(isTrat ? [] : [it.nMissing]))
+    }
+    rows.push([])
+  }
+  if (irat) itemRows(t('iRAT (répondants : étudiants)'), irat, false, false)
+  if (trat)
+    itemRows(
+      t('tRAT (répondants : équipes — choix du 1ᵉʳ essai — barème IF-AT 4/2/1/0)'),
+      trat,
+      true,
+      false
+    )
+  if (app)
+    itemRows(t('APPLICATION ET CAS CLINIQUES (répondants : équipes)'), app, false, true)
+
+  // ---- 3. Comparaison iRAT → tRAT ----
+  if (comparison && irat && trat) {
+    boldRows.push(rows.length)
+    line(`3. ${t('COMPARAISON iRAT → tRAT (effet équipe)')}`)
+    boldRows.push(rows.length)
+    line(
+      t('Question'), t('Intitulé'), t('Réussite individus (%)'),
+      t('Équipes 1er essai (%)'), t('Équipes au final (%)'), t('Gain (points de %)')
+    )
+    for (const row of comparison) {
+      line(
+        fmtQLabel(row.question.label),
+        row.question.text,
+        pc(row.pIrat),
+        pc(row.pTratFirst),
+        pc(row.pTratFinal),
+        row.gain !== null ? Math.round(row.gain * 1000) / 10 : null
+      )
+    }
+    line(
+      t('Moyenne /20'), '', nb(irat.test.mean20, 1), '', nb(trat.test.mean20, 1),
+      irat.test.mean20 !== null && trat.test.mean20 !== null
+        ? nb(trat.test.mean20 - irat.test.mean20, 1)
+        : null
+    )
+    rows.push([])
+  }
+
+  // ---- 4. Distribution des notes ----
+  boldRows.push(rows.length)
+  line(`4. ${t('RÉPARTITION DES NOTES (sur 20)')}`)
+  boldRows.push(rows.length)
+  line(t('Section'), t('Classe'), t('Effectif'))
+  for (const [label, a] of sections) {
+    if (!a) continue
+    for (const bin of a.test.distribution) {
+      line(label, bin.label, bin.count)
+    }
+  }
+  rows.push([])
+
+  // ---- 5. Questions à revoir ----
+  boldRows.push(rows.length)
+  line(`5. ${t('QUESTIONS À REVOIR (signalement automatique)')}`)
+  boldRows.push(rows.length)
+  line(t('Section'), t('Question'), t('Intitulé'), t('Points à surveiller'))
+  for (const f of flagged) {
+    line(t(KIND_LABEL[f.kind]), f.label, f.text, f.problems.join(' ; '))
+  }
+
+  return { rows, boldRows }
+}
+
+// Libellés de section utilisés par l'export docimologique
+const KIND_LABEL: Record<string, string> = {
+  irat: 'iRAT (individuel)',
+  trat: 'tRAT (équipes)',
+  application: 'Application (équipes)',
+}
+
+// ---------------- Écriture CSV (BOM UTF-8, « ; », virgule décimale) ----------------
+
+/** Convertit une matrice en lignes CSV francophones (Excel FR). */
+function matrixToCsv(matrix: MatrixResult): string {
+  const esc = (v: Cell) => {
+    let s: string
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      // virgule décimale française, comme les exports historiques
+      s = String(v).replace('.', ',')
+    } else {
+      s = String(v ?? '')
+    }
+    // Anti « CSV injection » : un texte libre saisi par un étudiant (nom,
+    // justification, commentaire) qui commencerait par =, +, -, @, une
+    // tabulation ou un retour chariot pourrait être interprété comme une
+    // formule par Excel. On le neutralise d’une apostrophe initiale.
+    if (/^[=+\-@\t\r]/.test(s)) {
+      s = "'" + s
+    }
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return matrix.rows.map((r) => r.map(esc).join(';')).join('\r\n')
+}
+
+function downloadCsv(matrix: MatrixResult, filename: string) {
+  const blob = new Blob(['\uFEFF' + matrixToCsv(matrix)], { type: 'text/csv;charset=utf-8' })
+  downloadBlob(blob, filename)
+}
+
+/** CSV des résultats — bouton de la rubrique « Résultats ». */
+export function exportCsv(
+  data: DashboardDTO,
+  ratQs: DashboardDTO['questions'],
+  appQs: DashboardDTO['questions']
+) {
+  downloadCsv(buildResultsMatrix(data, ratQs, appQs), `resultats-tbl-${data.session.code}.csv`)
+}
+
+/** CSV du questionnaire — bouton de la rubrique « Questionnaire ». */
+export function exportQuestionnaireCsv(data: DashboardDTO) {
+  downloadCsv(buildQuestionnaireMatrix(data), `questionnaire-tbl-${data.session.code}.csv`)
+}
+
+/** CSV de la docimologie — bouton de la rubrique « Statistiques » (Docimologie). */
+export function exportDocimologyCsvFromMatrix(matrix: MatrixResult, code: string) {
+  downloadCsv(matrix, `docimologie-tbl-${code}.csv`)
+}
+
+// ---------------- Classeur Excel à 3 feuilles ----------------
+
+/**
+ * v2.7.0 — « Exporter les résultats — Excel (3 feuilles) », dans la
+ * rubrique Terminé du déroulé : un UNIQUE fichier .xlsx contenant
+ *   feuille 1 : Résultats (notes, réclamations, commentaires des pairs) ;
+ *   feuille 2 : Docimologie (analyse complète) ;
+ *   feuille 3 : Questionnaire (synthèse par item + réponses détaillées).
+ * Le fichier est construit localement par le navigateur, sans service
+ * externe (fonctionne aussi en mode réseau local sans Internet).
+ */
+export function exportXlsx(
+  data: DashboardDTO,
+  ratQs: DashboardDTO['questions'],
+  appQs: DashboardDTO['questions']
+) {
+  const results = buildResultsMatrix(data, ratQs, appQs)
+  const questionnaire = buildQuestionnaireMatrix(data)
+
+  // Analyses docimologiques : mêmes fonctions que l'onglet Statistiques.
+  const irat = ratQs.length > 0 && data.students.length > 0 ? analyzeSection(buildIratSection(data)) : null
+  const trat = ratQs.length > 0 && data.teams.length > 0 ? analyzeSection(buildTratSection(data)) : null
+  const app = appQs.length > 0 && data.teams.length > 0 ? analyzeSection(buildApplicationSection(data)) : null
+  const comparison = irat && trat ? buildComparison(irat, trat) : null
+  const flagged = flagQuestions(
+    [
+      { kind: 'irat', analysis: irat },
+      { kind: 'trat', analysis: trat },
+      { kind: 'application', analysis: app },
+    ].filter((s): s is { kind: 'irat' | 'trat' | 'application'; analysis: SectionAnalysis } => s.analysis !== null)
+  )
+  const docimology = buildDocimologyMatrix(data, irat, trat, app, comparison, flagged)
+
+  // Neutralisation des formules pour les chaînes Excel (même règle que le CSV)
+  const neutralize = (m: MatrixResult): MatrixResult => ({
+    rows: m.rows.map((r) =>
+      r.map((c) =>
+        typeof c === 'string' && /^[=+\-@\t\r]/.test(c) ? `'${c}` : c
+      )
+    ),
+    boldRows: m.boldRows,
+  })
+
+  const blob = buildXlsx([
+    {
+      name: t('Résultats'),
+      rows: neutralize(results).rows,
+      boldRows: results.boldRows,
+      colWidths: { 0: 22, 1: 14 },
+    },
+    {
+      name: t('Docimologie'),
+      rows: neutralize(docimology).rows,
+      boldRows: docimology.boldRows,
+      colWidths: { 0: 18, 1: 14, 2: 46 },
+    },
+    {
+      name: t('Questionnaire'),
+      rows: neutralize(questionnaire).rows,
+      boldRows: questionnaire.boldRows,
+      colWidths: { 0: 20, 1: 12, 2: 60 },
+    },
+  ])
+  downloadBlob(blob, `resultats-tbl-${data.session.code}.xlsx`)
 }

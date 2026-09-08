@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/appeal — l'équipe soumet une réclamation (appel) sur une question
 export async function POST(req: NextRequest) {
@@ -70,6 +71,9 @@ export async function POST(req: NextRequest) {
         },
       })
     }
+
+    // v2.9.0 : réclamation soumise → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json({ ok: true })
   } catch (e) {

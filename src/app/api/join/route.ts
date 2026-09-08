@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionByCode, randomToken, randomRecoveryCode, normalizeName } from '@/lib/tbl'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/join — l'étudiant rejoint une séance
 //
@@ -104,6 +105,9 @@ export async function POST(req: NextRequest) {
           recoveryCode: newCode,
         },
       })
+      // v2.9.0 : retour d'un étudiant (changement d'équipe possible) →
+      // compteurs + 1.
+      await bumpRevisions(session.id)
       if (!match.recoveryCode) isNew = true // montre le nouveau code à l'écran
     } else {
       // v2.6.0 : premier compte pour ce nom — le code personnel choisi par
@@ -161,6 +165,8 @@ export async function POST(req: NextRequest) {
           teamId: targetTeamId,
         },
       })
+      // v2.9.0 : nouvel étudiant → compteurs + 1.
+      await bumpRevisions(session.id)
       isNew = true
     }
 

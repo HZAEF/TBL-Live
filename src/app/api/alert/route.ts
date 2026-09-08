@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { extractToken } from '@/lib/tbl'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/alert — v2.5.0 : signalement anti-capture envoyé par la vue
 // étudiant (silencieux côté étudiant : jamais d'erreur affichée).
@@ -70,6 +71,11 @@ export async function POST(req: NextRequest) {
     }
 
     await db.alertEvent.create({ data: { studentId: student.id, kind, phase } })
+    // v2.9.0 : le signalement intéresse UNIQUEMENT le tableau de bord
+    // enseignant → compteur enseignant + 1 seulement : les 65 étudiants
+    // ne rechargent PAS leur état pour un signalement qui ne les
+    // concerne pas (c'est la moitié de la fluidité en grande classe).
+    await bumpRevisions(student.sessionId, { student: false })
     return NextResponse.json({ ok: true })
   } catch (e) {
     console.error('POST /api/alert', e)

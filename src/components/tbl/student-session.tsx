@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Clock, KeyRound, LogOut, Trophy, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,8 +17,9 @@ import { api, removeStudentSession, usePoll } from '@/lib/tbl-client'
 import { PHASE_INFO, type StudentStateDTO, type SaiItemDTO } from '@/lib/tbl-types'
 import { useI18n } from '@/lib/i18n'
 import { fmtNote } from '@/lib/grades'
+import { noteServerNow } from '@/lib/server-clock'
 import { SAI_SUBSCALES, SAI_SUBSCALE_INFO, SAI_LIKERT_KEYS, saiItemText } from '@/lib/sai'
-import { ChoiceButton, choiceLetter, InfoCard, PhaseBadge } from './shared'
+import { ChoiceButton, choiceLetter, ElapsedSince, InfoCard, PhaseBadge } from './shared'
 import { IratQuiz, TratQuiz, AppealView, ApplicationView, PeerView } from './student-quizzes'
 import { AntiCapture } from './anti-capture'
 import { Textarea } from '@/components/ui/textarea'
@@ -32,14 +33,35 @@ export function StudentSession({
   onLeave: () => void
   onExit: () => void
 }) {
+  // v2.9.0 — Sondage allégé : le fetcher garde le dernier état complet
+  // en référence. À chaque cycle il envoie ?rev=N ; si le serveur
+  // répond « unchanged », l'ANCIEN objet est renvoyé tel quel — même
+  // référence React → aucun re-rendu, aucune requête lourde en base.
+  // Au moindre changement, l'état complet neuf arrive et remplace tout.
+  const lastStateRef = useRef<StudentStateDTO | null>(null)
+  const fetchState = useCallback(async () => {
+    const rev = lastStateRef.current?.revision
+    const url = rev === undefined ? '/api/student' : `/api/student?rev=${rev}`
+    const d = await api<StudentStateDTO | { unchanged: true; revision: number; serverNow?: string }>(
+      url,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    // v2.9.0 : l'heure serveur corrige l'horloge de l'appareil — tous
+    // les minuteurs (iRAT, durée de phase) sont synchronisés.
+    noteServerNow(d.serverNow)
+    if ((d as { unchanged?: boolean }).unchanged === true) {
+      return lastStateRef.current as StudentStateDTO
+    }
+    lastStateRef.current = d as StudentStateDTO
+    return d as StudentStateDTO
+  }, [token])
   const { data, error, loading, refresh } = usePoll<StudentStateDTO>(
-    // v2.4.0 : jeton dans l'en-tête Authorization (hors des journaux serveur).
-    () => api<StudentStateDTO>('/api/student', { headers: { Authorization: `Bearer ${token}` } }),
+    fetchState,
     // Sondage adaptatif : 2,5 s pendant les phases où les étudiants
     // répondent (iRAT, tRAT, application), 5 s pendant les phases d'attente
-    // (accueil, réclamations, feedback, pairs, fin) — divise environ par
-    // deux la charge sur la base Neon pour une grande classe, sans perte
-    // de réactivité là où elle compte.
+    // (accueil, réclamations, feedback, pairs, fin) — v2.9.0 : avec le
+    // sondage allégé, ces requêtes coûtent presque rien quand rien ne
+    // change : la réactivité reste maximale même avec 65 étudiants.
     (d) => (d && ['irat', 'trat', 'application'].includes(d.session.status) ? 2500 : 5000)
   )
   const [confirmLeave, setConfirmLeave] = useState(false)
@@ -157,6 +179,14 @@ export function StudentSession({
             </button>
           )}
         </div>
+        {/* v2.9.0 — Durée de la phase (chronomètre ASCENDANT, côté
+            étudiant comme côté enseignant) : chaque phase déroule son
+            propre minute. Pendant l'iRAT, le compte à rebours descendant
+            reste affiché dans le bandeau du test ci-dessous. */}
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-stone-500">
+          <Clock className="h-3.5 w-3.5 text-stone-400" />
+          {t('Durée de la phase :')} <ElapsedSince startedAt={data.session.phaseStartedAt} />
+        </p>
       </div>
 
       {/* Contenu selon la phase */}
@@ -164,7 +194,15 @@ export function StudentSession({
         {status === 'irat' && <IratQuiz data={data} refresh={refresh} token={token} />}
         {status === 'trat' && <TratQuiz data={data} refresh={refresh} token={token} />}
         {status === 'appeal' && <AppealView data={data} refresh={refresh} token={token} />}
-        {status === 'feedback' && <FeedbackView data={data} />}
+        {/* v2.7.0 : écran d'attente entre réclamations et feedback — aucune
+            donnée de résultats n'est envoyée par le serveur tant que
+            l'enseignant n'a pas lancé le feedback : rien à capturer. */}
+        {status === 'feedback' &&
+          (data.session.feedbackReady === false ? (
+            <FeedbackWaitView />
+          ) : (
+            <FeedbackView data={data} />
+          ))}
         {status === 'application' && <ApplicationView data={data} refresh={refresh} token={token} />}
         {status === 'peer' && <PeerView data={data} refresh={refresh} token={token} />}
         {status === 'finished' && <FinishedView data={data} token={token} refresh={refresh} onExit={onExit} />}
@@ -264,6 +302,36 @@ function LobbyView({ data }: { data: StudentStateDTO }) {
             )}
           </p>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ================= Attente avant le feedback (v2.7.0) =================
+
+// Entre les réclamations et le feedback, l'étudiant voit cet écran NEUTRE :
+// le serveur ne lui envoie ni questions, ni réponses, ni statistiques tant
+// que l'enseignant n'a pas cliqué « Lancer le feedback » — impossible de
+// capturer les résultats en avance, l'attention reste sur le professeur.
+function FeedbackWaitView() {
+  const { t } = useI18n()
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-8 text-center shadow-sm">
+        <div className="mx-auto flex h-16 w-16 animate-pulse items-center justify-center rounded-full bg-emerald-100">
+          <Clock className="h-8 w-8 text-emerald-600" />
+        </div>
+        <p className="mt-4 text-lg font-bold text-emerald-900">
+          {t('Préparez-vous à écouter votre professeur')}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-emerald-800">
+          {t(
+            'Les réclamations sont terminées. Votre professeur va vous commenter les résultats : vos notes apparaîtront ici seulement quand il lancera le feedback.'
+          )}
+        </p>
+        <p className="mt-3 rounded-xl bg-white/70 px-4 py-2 text-xs font-semibold text-emerald-700">
+          {t('Gardez cette page ouverte — elle passera toute seule au feedback.')}
+        </p>
       </div>
     </div>
   )

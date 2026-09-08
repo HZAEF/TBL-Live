@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Check, ChevronLeft, ChevronRight, RotateCcw, Send, Star, Users, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRight, Check, Clock, Loader2, Save, Send, Star, Users, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
@@ -613,9 +613,12 @@ export function AppealView({
 
 interface CaseGroup {
   key: string
-  title: string
+  title: string | null
   intro: string | null
   questions: QuestionDTO[]
+  /** v2.7.0 : cas lancé par l'enseignant (false = page d'attente).
+   *  Le groupe « libres » (ancien format) est toujours accessible. */
+  opened: boolean
 }
 
 export function ApplicationView({
@@ -640,13 +643,19 @@ export function ApplicationView({
   )
 
   // Groupes affichés : un par cas clinique (+ un groupe pour les exercices
-  // libres de l'ancien format), affichés UN PAR UN.
+  // libres de l'ancien format).
+  // v2.8.2 : PLUS DE NAVIGATION ÉTUDIANTE — un seul cas est ouvert à la
+  // fois (le serveur referme le précédent au lancement du suivant) : la
+  // page suit AUTOMATIQUEMENT le cas lancé par l'enseignant (polling
+  // 2,5 s). Un cas non lancé n'envoie ni énoncé ni questions : page
+  // d'attente neutre, aucun contenu ne fuit.
   const groups: CaseGroup[] = useMemo(() => {
     const gs: CaseGroup[] = (data.appCases ?? []).map((c) => ({
       key: c.id,
       title: c.title,
       intro: c.intro,
       questions: questions.filter((q) => q.caseId === c.id),
+      opened: c.opened !== false,
     }))
     const free = questions.filter((q) => !q.caseId)
     if (free.length > 0) {
@@ -655,25 +664,82 @@ export function ApplicationView({
         title: 'Exercices d\u2019application',
         intro: null,
         questions: free,
+        opened: true,
       })
     }
-    return gs.filter((g) => g.questions.length > 0)
+    return gs.filter((g) => g.questions.length > 0 || !g.opened)
   }, [data.appCases, questions])
 
-  // Premier groupe non terminé par défaut (comme pour l'iRAT)
+  // Réponses déjà données par l'équipe (pour l'état « terminé » du cas).
   const answeredIds = useMemo(
     () => new Set(data.teamAppAnswers.map((a) => a.questionId)),
     [data.teamAppAnswers]
   )
-  const firstPending = groups.findIndex((g) => g.questions.some((q) => !answeredIds.has(q.id)))
-  const [groupIndex, setGroupIndex] = useState(() => Math.max(0, firstPending))
-  const [selection, setSelection] = useState<Record<string, number>>({})
+  // v2.7.0 : brouillons des justifications (le texte reste à enregistrer
+  // explicitement ; les RÉPONSES, elles, s'enregistrent au clic).
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<string | null>(null)
+  // v2.7.0 : affichage immédiat (optimiste) de la réponse choisie — le clic
+  // est visible INSTANTANÉMENT, l'enregistrement part en arrière-plan.
+  const [optimistic, setOptimistic] = useState<Record<string, number>>({})
+  // v2.7.0 : chaînage des envois par question (deux clics rapides A puis B
+  // partent DANS l'ORDRE — la dernière réponse est toujours la bonne).
+  const chains = useRef<Record<string, Promise<void>>>({})
+
+  // Nettoyage de l'optimisme : quand le serveur confirme la réponse
+  // (mine.choice == valeur optimiste), l'optimisme devient inutile.
+  useEffect(() => {
+    setOptimistic((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const [qid, choice] of Object.entries(prev)) {
+        const mine = data.teamAppAnswers.find((a) => a.questionId === qid)
+        if (mine && mine.choice === choice) {
+          delete next[qid]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data.teamAppAnswers])
 
   useEffect(() => {
-    setSelection({})
+    setOptimistic({})
   }, [data.session.status])
+
+  // v2.8.2 : PLUS DE NAVIGATION — l'enseignant est seul pilote. La page
+  // suit automatiquement LE cas lancé (un seul cas ouvert à la fois,
+  // le lancement du cas N referme le précédent côté serveur). Séances
+  // de l'ancien format (questions d'application sans cas clinique) :
+  // exercices libres toujours accessibles. Calcul AVANT les retours
+  // anticipés (règle des hooks React : l'effet de défilement qui suit
+  // doit toujours être exécuté).
+  const caseGroups = groups.filter((g) => g.key !== 'libres')
+  const openCase = caseGroups.find((g) => g.opened) ?? null
+  const libres = groups.find((g) => g.key === 'libres') ?? null
+  const group = openCase ?? (caseGroups.length === 0 ? libres : null)
+  const caseNumber = openCase
+    ? caseGroups.indexOf(openCase) + 1
+    : Math.max(1, caseGroups.findIndex((g) => !g.opened) + 1)
+  const totalCases = caseGroups.length
+  const isLastCase = openCase !== null ? caseNumber === totalCases : libres !== null
+  const groupDone =
+    group !== null &&
+    group.questions.every(
+      (q) => answeredIds.has(q.id) || revealedIds.has(q.id)
+    )
+  const allDone = groups.every(
+    (g) =>
+      !g.opened ||
+      g.questions.every((q) => answeredIds.has(q.id) || revealedIds.has(q.id))
+  )
+
+  // v2.8.2 : quand l'enseignant lance un autre cas, la page « tourne » —
+  // on remonte en haut pour montrer l'énoncé du nouveau cas.
+  const groupKey = group?.key
+  useEffect(() => {
+    window.scrollTo({ top: 0 })
+  }, [groupKey])
 
   if (!data.me.team) {
     return (
@@ -692,177 +758,166 @@ export function ApplicationView({
     )
   }
 
-  const group = groups[Math.min(groupIndex, groups.length - 1)]
-  const isLastGroup = groupIndex >= groups.length - 1
-  const groupDone = group.questions.every(
-    (q) => answeredIds.has(q.id) || revealedIds.has(q.id)
-  )
-  const allDone = groups.every((g) =>
-    g.questions.every((q) => answeredIds.has(q.id) || revealedIds.has(q.id))
-  )
-
-  // Enregistrement : envoi automatique au premier choix, mise à jour
-  // explicite ensuite (bouton « Mettre à jour la réponse de l'équipe »).
-  const save = async (questionId: string, choice: number, text: string) => {
-    setSaving(questionId)
-    try {
-      const res = await api<{ revealedNow: boolean }>('/api/app-answer', {
-        method: 'POST',
-        body: JSON.stringify({ token, questionId, choice, text }),
-      })
-      setSelection((s) => {
-        const next = { ...s }
-        delete next[questionId]
-        return next
-      })
-      if (res.revealedNow) {
-        toast({
-          title: t('Toutes les équipes ont répondu !'),
-          description: t('Les réponses à cette question sont maintenant révélées.'),
+  // v2.7.0 : enregistrement AUTOMATIQUE à CHAQUE clic — plus de bouton
+  // « Mettre à jour » : si l'équipe change d'avis (A puis B), la réponse
+  // est remplacée immédiatement, sans autre action. Les clics sur une
+  // même question sont chaînés dans l'ordre : la DERNIÈRE réponse
+  // envoyée est toujours celle enregistrée.
+  const save = (questionId: string, choice: number, text: string) => {
+    const run = async () => {
+      setSaving(questionId)
+      try {
+        const res = await api<{ revealedNow: boolean }>('/api/app-answer', {
+          method: 'POST',
+          body: JSON.stringify({ token, questionId, choice, text }),
         })
+        if (res.revealedNow) {
+          toast({
+            title: t('Toutes les équipes ont répondu !'),
+            description: t('Les réponses à cette question sont maintenant révélées.'),
+          })
+        }
+        await refresh()
+      } catch (e) {
+        toast({
+          title: t('Impossible d’enregistrer'),
+          description: e instanceof Error ? e.message : t('Erreur inconnue.'),
+          variant: 'destructive',
+        })
+        await refresh()
+      } finally {
+        setSaving(null)
       }
-      await refresh()
-    } catch (e) {
-      toast({
-        title: t('Impossible d’enregistrer'),
-        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-        variant: 'destructive',
-      })
-      await refresh()
-    } finally {
-      setSaving(null)
     }
+    chains.current[questionId] = (chains.current[questionId] ?? Promise.resolve()).then(
+      run,
+      run
+    )
+  }
+
+  // Clic sur une réponse : affichage immédiat + envoi en arrière-plan.
+  const onChoice = (questionId: string, ci: number) => {
+    const mine = data.teamAppAnswers.find((a) => a.questionId === questionId)
+    if (mine && revealedIds.has(questionId)) return
+    setOptimistic((prev) => ({ ...prev, [questionId]: ci }))
+    save(questionId, ci, drafts[questionId] ?? mine?.text ?? '')
   }
 
   return (
     <div className="space-y-4">
       <InfoCard tone="emerald" title={t("Cas cliniques d'application")}>
-        {t('Travaillez chaque cas en équipe et choisissez vos réponses : elles sont')}{' '}
-        <strong>{t('enregistrées automatiquement')}</strong>
-        {t('dès que vous cliquez. Les réponses de chaque question seront')}{' '}
+        {t('Travaillez chaque cas en équipe et choisissez vos réponses :')}{' '}
+        <strong>{t('chaque clic enregistre la réponse de votre équipe')}</strong>
+        {t('. Vous pouvez changer d’avis jusqu’à la révélation : le dernier clic remplace le précédent. Les réponses sont')}{' '}
         <strong>{t('révélées automatiquement')}</strong>
-        {t(
-          'dès que toutes les équipes auront répondu. Pour changer une réponse avant la révélation, utilisez « Mettre à jour ».'
-        )}
+        {t('dès que toutes les équipes auront répondu.')}{' '}
+        {t('Votre professeur lance chaque cas l’un après l’autre : la page changera toute seule, aucun bouton à chercher.')}
       </InfoCard>
 
-      {/* Sélecteur de cas (un cas à la fois) */}
-      {groups.length > 1 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          {groups.map((g, i) => {
-            const gDone = g.questions.every(
-              (q) => answeredIds.has(q.id) || revealedIds.has(q.id)
-            )
-            return (
-              <button
-                key={g.key}
-                onClick={() => setGroupIndex(i)}
-                aria-label={t("Aller à l'application {n}", { n: i + 1 })}
-                className={cn(
-                  'flex h-9 w-9 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
-                  i === groupIndex
-                    ? 'border-lime-600 bg-white text-lime-700'
-                    : gDone
-                      ? 'border-lime-500 bg-lime-500 text-white'
-                      : 'border-stone-300 bg-white text-stone-400'
-                )}
-              >
-                {gDone && i !== groupIndex ? <Check className="h-4 w-4" /> : i + 1}
-              </button>
-            )
-          })}
-        </div>
-      )}
+      {/* v2.8.2 : sélecteur de cas et boutons Précédent / Cas suivant
+          SUPPRIMÉS (demande de l'enseignante) — la page tourne toute
+          seule quand l'enseignant lance le cas suivant. */}
 
-      {/* En-tête du cas courant */}
-      <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-5">
-        <p className="text-xs font-bold uppercase tracking-wide text-lime-700">
-          {groups.length > 1
-            ? t('Application {i} sur {n}', { i: groupIndex + 1, n: groups.length })
-            : t('Application')}
-          {!groupDone && t(' — en cours')}
-          {groupDone && t(' — terminé')}
-        </p>
-        <p className="mt-1.5 text-lg font-bold leading-snug text-stone-900">
-          {group.key === 'libres' ? t('Exercices d’application') : group.title}
-        </p>
-        {group.intro && (
-          <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-stone-700">
-            {group.intro}
-          </p>
-        )}
-      </div>
-
-      {/* QCU du cas */}
-      {group.questions.map((q, qi) => (
-        <AppQuestionCard
-          key={q.id}
-          q={q}
-          qi={qi}
-          revealed={revealedIds.has(q.id)}
-          progress={progressByQuestion.get(q.id)}
-          mine={data.teamAppAnswers.find((a) => a.questionId === q.id)}
-          pendingChoice={selection[q.id]}
-          textDraft={drafts[q.id]}
-          saving={saving === q.id}
-          teamName={data.me.team?.name}
-          allTeamAppAnswers={data.allTeamAppAnswers ?? []}
-          onChoice={(ci) => {
-            const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
-            if (mine === undefined) {
-              // Premier choix : envoi automatique
-              void save(q.id, ci, drafts[q.id] ?? '')
-            } else {
-              // Changement : sélection en attente de mise à jour
-              setSelection({ ...selection, [q.id]: ci })
-            }
-          }}
-          onTextChange={(v) => setDrafts({ ...drafts, [q.id]: v })}
-          onUpdate={() => {
-            const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
-            const choice = selection[q.id] ?? mine?.choice ?? 0
-            void save(q.id, choice, drafts[q.id] ?? mine?.text ?? '')
-          }}
-        />
-      ))}
-
-      {/* Navigation entre cas */}
-      <div className="flex gap-3">
-        <Button
-          variant="outline"
-          className="h-12 flex-1 border-stone-300 text-stone-700"
-          disabled={groupIndex === 0}
-          onClick={() => {
-            setGroupIndex(Math.max(0, groupIndex - 1))
-            window.scrollTo({ top: 0 })
-          }}
-        >
-          <ChevronLeft className="mr-1 h-5 w-5 rtl:rotate-180" />
-          {t('Précédent')}
-        </Button>
-        {!isLastGroup ? (
-          <Button
-            className="h-12 flex-[2] bg-lime-600 text-base hover:bg-lime-700"
-            onClick={() => {
-              setGroupIndex(Math.min(groups.length - 1, groupIndex + 1))
-              window.scrollTo({ top: 0 })
-            }}
-          >
-            {groupDone ? t('Cas suivant') : t('Passer au cas suivant')}
-            <ChevronRight className="ml-2 h-5 w-5 rtl:rotate-180" />
-          </Button>
-        ) : (
-          <div className="flex flex-[2] items-center justify-center rounded-xl border-2 border-dashed border-stone-300 px-3 text-center text-sm text-stone-500">
-            {allDone ? (
-              <span className="font-semibold text-emerald-700">
-                <Check className="mr-1 inline h-4 w-4" />
-                {t('Tous les cas sont traités — attendez votre professeur.')}
-              </span>
-            ) : (
-              t('Dernier cas — attendez les autres équipes et votre professeur.')
+      {/* Aucun cas lancé : PAGE D'ATTENTE neutre — l'enseignant ouvre
+          chaque cas au moment de l'expliquer, aucun contenu ne fuit. */}
+      {!group ? (
+        <CaseWaitCard caseNumber={caseNumber} total={totalCases} />
+      ) : (
+        <>
+          {/* En-tête du cas courant */}
+          <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-5">
+            <p className="text-xs font-bold uppercase tracking-wide text-lime-700">
+              {totalCases > 1
+                ? t('Application {i} sur {n}', { i: caseNumber, n: totalCases })
+                : t('Application')}
+              {!groupDone && t(' — en cours')}
+              {groupDone && t(' — terminé')}
+            </p>
+            <p className="mt-1.5 text-lg font-bold leading-snug text-stone-900">
+              {group.key === 'libres' ? t('Exercices d’application') : group.title}
+            </p>
+            {group.intro && (
+              <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-stone-700">
+                {group.intro}
+              </p>
             )}
           </div>
+
+          {/* QCU du cas */}
+          {group.questions.map((q, qi) => (
+            <AppQuestionCard
+              key={q.id}
+              q={q}
+              qi={qi}
+              revealed={revealedIds.has(q.id)}
+              progress={progressByQuestion.get(q.id)}
+              mine={data.teamAppAnswers.find((a) => a.questionId === q.id)}
+              optimisticChoice={optimistic[q.id]}
+              textDraft={drafts[q.id]}
+              saving={saving === q.id}
+              teamName={data.me.team?.name}
+              allTeamAppAnswers={data.allTeamAppAnswers ?? []}
+              onChoice={(ci) => onChoice(q.id, ci)}
+              onTextChange={(v) => setDrafts({ ...drafts, [q.id]: v })}
+              onSaveText={() => {
+                const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
+                const choice = optimistic[q.id] ?? mine?.choice ?? 0
+                save(q.id, choice, drafts[q.id] ?? mine?.text ?? '')
+              }}
+            />
+          ))}
+        </>
+      )}
+
+      {/* v2.8.2 : plus de boutons de navigation — un simple état
+          d'avancement : l'enseignant pilote le passage au cas suivant. */}
+      {group && (
+        <div className="flex items-center justify-center rounded-xl border-2 border-dashed border-stone-300 px-3 py-3 text-center text-sm text-stone-500">
+          {allDone ? (
+            <span className="font-semibold text-emerald-700">
+              <Check className="mr-1 inline h-4 w-4" />
+              {t('Tous les cas sont traités — attendez votre professeur.')}
+            </span>
+          ) : isLastCase ? (
+            t('Dernier cas — attendez les autres équipes et votre professeur.')
+          ) : groupDone ? (
+            t('Ce cas est traité — votre professeur lancera le suivant.')
+          ) : (
+            t('Répondez en équipe — votre professeur lancera le cas suivant le moment venu.')
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// v2.7.0 — Page d'attente d'un cas clinique non lancé : neutre, sans
+// énoncé ni questions (le serveur ne les envoie même pas), pour que
+// l'enseignant explique chaque cas séparément sans avance des équipes.
+function CaseWaitCard({ caseNumber, total }: { caseNumber: number; total: number }) {
+  const { t } = useI18n()
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-8 text-center shadow-sm">
+        <div className="mx-auto flex h-16 w-16 animate-pulse items-center justify-center rounded-full bg-lime-100">
+          <Clock className="h-8 w-8 text-lime-700" />
+        </div>
+        {total > 1 && (
+          <p className="mt-4 text-xs font-bold uppercase tracking-wide text-lime-700">
+            {t('Application {i} sur {n}', { i: caseNumber, n: total })}
+          </p>
         )}
+        <p className="mt-1.5 text-lg font-bold text-stone-900">
+          {t('Cas clinique {n} — en préparation', { n: caseNumber })}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-lime-900">
+          {t(
+            'Votre professeur va présenter ce cas avant de le lancer : gardez cette page ouverte, l’énoncé apparaîtra tout seul dès qu’il sera prêt.'
+          )}
+        </p>
+        <p className="mt-3 rounded-xl bg-white/70 px-4 py-2 text-xs font-semibold text-lime-800">
+          {t('Ne quittez pas l’application — l’attente se terminera automatiquement.')}
+        </p>
       </div>
     </div>
   )
@@ -874,35 +929,35 @@ function AppQuestionCard({
   revealed,
   progress,
   mine,
-  pendingChoice,
+  optimisticChoice,
   textDraft,
   saving,
   teamName,
   allTeamAppAnswers,
   onChoice,
   onTextChange,
-  onUpdate,
+  onSaveText,
 }: {
   q: QuestionDTO
   qi: number
   revealed: boolean
   progress?: { questionId: string; answered: number; total: number }
   mine?: { questionId: string; choice: number; text: string | null }
-  pendingChoice?: number
+  optimisticChoice?: number
   textDraft?: string
   saving: boolean
   teamName?: string
   allTeamAppAnswers: { teamName: string; questionId: string; choice: number; text: string | null }[]
   onChoice: (ci: number) => void
   onTextChange: (v: string) => void
-  onUpdate: () => void
+  onSaveText: () => void
 }) {
-  const sel = pendingChoice ?? mine?.choice
-  const dirty =
-    mine !== undefined &&
-    ((pendingChoice !== undefined && pendingChoice !== mine.choice) ||
-      (textDraft !== undefined && textDraft !== (mine.text ?? '')))
   const { t } = useI18n()
+  // v2.7.0 : affichage optimiste — la réponse cliquée s'affiche
+  // immédiatement, la confirmation du serveur suit en arrière-plan.
+  const sel = optimisticChoice ?? mine?.choice
+  const textDirty =
+    mine !== undefined && textDraft !== undefined && textDraft !== (mine.text ?? '')
 
   return (
     <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
@@ -927,7 +982,7 @@ function AppQuestionCard({
               text={c}
               state={state}
               showIcon={revealed}
-              disabled={revealed || saving}
+              disabled={revealed}
               onClick={() => onChoice(ci)}
             />
           )
@@ -985,24 +1040,52 @@ function AppQuestionCard({
         </div>
       ) : (
         <>
+          {/* Confirmation de l'enregistrement automatique */}
           {mine !== undefined && (
-            <p className="mt-3 text-center text-xs font-medium text-emerald-700">
-              <Check className="mr-1 inline h-3.5 w-3.5" />
-              {t('Réponse enregistrée ({l})', { l: choiceLetter(mine.choice) })}
-              {progress && progress.total > 1
-                ? t(' — en attente des autres équipes ({d}/{n})', {
-                    d: progress.answered,
-                    n: progress.total,
-                  })
-                : ''}
+            <p
+              className={cn(
+                'mt-3 text-center text-xs font-medium',
+                saving ? 'text-stone-400' : 'text-emerald-700'
+              )}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
+                  {t('Enregistrement…')}
+                </>
+              ) : (
+                <>
+                  <Check className="mr-1 inline h-3.5 w-3.5" />
+                  {t('Réponse enregistrée ({l})', { l: choiceLetter(mine.choice) })}
+                  {progress && progress.total > 1
+                    ? t(' — en attente des autres équipes ({d}/{n})', {
+                        d: progress.answered,
+                        n: progress.total,
+                      })
+                    : ''}
+                </>
+              )}
             </p>
           )}
-          {mine === undefined && progress && progress.total > 1 && (
+          {mine === undefined && saving && (
+            <p className="mt-3 text-center text-xs font-medium text-stone-400">
+              <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
+              {t('Enregistrement…')}
+            </p>
+          )}
+          {mine === undefined && !saving && progress && progress.total > 1 && (
             <p className="mt-3 text-center text-xs text-stone-500">
               {t('{d}/{n} équipe(s) ont répondu à cette question', {
                 d: progress.answered,
                 n: progress.total,
               })}
+            </p>
+          )}
+          {mine !== undefined && !textDirty && (
+            <p className="mt-2 text-center text-xs text-stone-400">
+              {t(
+                'Chaque clic enregistre directement la réponse — changez d’avis autant que vous voulez, le dernier clic compte.'
+              )}
             </p>
           )}
           <Textarea
@@ -1012,31 +1095,21 @@ function AppQuestionCard({
             rows={2}
             className="mt-3 resize-none text-[15px]"
           />
-          {(dirty || mine === undefined) && (
+          {textDirty && (
             <Button
-              className="mt-3 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
-              disabled={saving || (mine === undefined && sel === undefined)}
-              onClick={onUpdate}
+              className="mt-3 h-11 w-full bg-emerald-600 text-base hover:bg-emerald-700"
+              disabled={saving}
+              onClick={onSaveText}
             >
-              {saving ? t('Envoi…') : mine === undefined ? (
-                <>
-                  <Send className="mr-2 h-4 w-4" />
-                  {t('Envoyer la réponse de l’équipe')}
-                </>
+              {saving ? (
+                t('Envoi…')
               ) : (
                 <>
-                  <RotateCcw className="mr-2 h-4 w-4" />
-                  {t('Mettre à jour la réponse de l’équipe')}
+                  <Save className="mr-2 h-4 w-4" />
+                  {t('Enregistrer la justification')}
                 </>
               )}
             </Button>
-          )}
-          {mine !== undefined && !dirty && pendingChoice === undefined && (
-            <p className="mt-2 text-center text-xs text-stone-500">
-              {t(
-                'Pour changer de réponse : choisissez une autre proposition puis « Mettre à jour ».'
-              )}
-            </p>
           )}
         </>
       )}

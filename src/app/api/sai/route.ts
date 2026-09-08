@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 import { extractToken } from '@/lib/tbl'
 
 // POST /api/sai — soumission du questionnaire de fin de séance (TBL-SAI).
@@ -70,6 +71,8 @@ export async function POST(req: NextRequest) {
         where: { id: student.id },
         data: { saiCompletedAt: new Date(), saiComment: comment || null },
       })
+      // v2.9.0 : complétion sans réponses (séance antérieure) → compteurs + 1.
+      await bumpRevisions(student.sessionId)
       return NextResponse.json({ ok: true })
     }
 
@@ -119,6 +122,10 @@ export async function POST(req: NextRequest) {
         data: { saiCompletedAt: new Date(), saiComment: comment || null },
       }),
     ])
+
+    // v2.9.0 : questionnaire soumis (note finale et rang débloqués pour
+    // cet étudiant) → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json({ ok: true })
   } catch (e) {

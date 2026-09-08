@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Copy,
   Check,
@@ -12,7 +12,9 @@ import {
   Eye,
   EyeOff,
   Download,
+  Lock,
   LogOut,
+  Play,
   RefreshCw,
   CopyPlus,
   Dices,
@@ -33,7 +35,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { api, removeTeacherSession, usePoll } from '@/lib/tbl-client'
+import { api, refreshTeacherSessionMeta, removeTeacherSession, usePoll } from '@/lib/tbl-client'
+import { noteServerNow } from '@/lib/server-clock'
+import { loadAppConfig } from '@/lib/app-config'
 import {
   PHASE_INFO,
   PHASE_ORDER,
@@ -47,8 +51,44 @@ import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 import { useI18n, formatDate } from '@/lib/i18n'
 import { Countdown, ElapsedSince, InfoCard, PhaseBadge, choiceLetter } from './shared'
-import { TeamsTab, QuestionsTab, ResultsTab, AppealsTab, SignalementsTab, QuestionnaireTab, exportCsv } from './teacher-tabs'
+import {
+  TeamsTab,
+  QuestionsTab,
+  ResultsTab,
+  AppealsTab,
+  SignalementsTab,
+  QuestionnaireTab,
+  ConfigurationsTab,
+  readSyncConfig,
+  exportXlsx,
+} from './teacher-tabs'
 import { StatsTab } from './stats-tab'
+import { downloadBlob } from '@/lib/xlsx-writer'
+
+// v2.8.2 — Synchronisation d'arrière-plan Internet ↔ réseau local.
+// Partagée par le cycle automatique (toutes les 5 secondes) ET par le
+// déclenchement immédiat qui suit CHAQUE action de l'enseignant
+// (changement de phase, lancement d'un cas, feedback…) : les étudiants
+// connectés à l'autre version voient la page tourner sans attendre le
+// prochain cycle. Un seul cycle à la fois par séance — jamais de
+// chevauchement (un cycle = tirage + fusion + envoi du miroir complet,
+// quelques centaines de millisecondes sur une séance ordinaire).
+// Silencieuse : une coupure réseau n'affiche rien, la séance continue.
+const syncInFlight = new Set<string>()
+function backgroundSync(code: string, token: string) {
+  const cfg = readSyncConfig(code)
+  if (!cfg?.auto || !cfg.url) return
+  if (syncInFlight.has(code)) return
+  syncInFlight.add(code)
+  api(`/api/sessions/${code}/manage`, {
+    method: 'POST',
+    body: JSON.stringify({ token, action: 'sync_now', remoteUrl: cfg.url }),
+  })
+    .catch(() => undefined)
+    .finally(() => {
+      syncInFlight.delete(code)
+    })
+}
 
 export function TeacherDashboard({
   code,
@@ -63,13 +103,31 @@ export function TeacherDashboard({
   onAuthError: () => void
   onOpenSession: (code: string, token: string, title: string) => void
 }) {
+  // v2.9.0 — Sondage allégé : ?rev=N → réponse minuscule si rien n'a
+  // changé (l'ancien objet est renvoyé → aucun re-rendu). Au moindre
+  // changement (réponse, signalement, phase…), l'état complet arrive.
+  const lastStateRef = useRef<DashboardDTO | null>(null)
   const { data, error, loading, refresh } = usePoll<DashboardDTO>(
     // v2.4.0 : jeton dans l'en-tête Authorization (plus jamais dans l'URL
     // des appels API → n'apparaît pas dans les journaux serveur).
-    () =>
-      api<DashboardDTO>(`/api/sessions/${code}/dashboard`, {
-        headers: { Authorization: `Bearer ${token}` },
-      }),
+    async () => {
+      const rev = lastStateRef.current?.revision
+      const url = rev === undefined ? `/api/sessions/${code}/dashboard` : `/api/sessions/${code}/dashboard?rev=${rev}`
+      const d = await api<DashboardDTO | { unchanged: true; revision: number; serverNow?: string }>(
+        url,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      )
+      // v2.9.0 : heure serveur → minuteur iRAT synchronisé avec celui des
+      // étudiants, même si l'horloge de cet ordinateur est décalée.
+      noteServerNow(d.serverNow)
+      if ((d as { unchanged?: boolean }).unchanged === true) {
+        return lastStateRef.current as DashboardDTO
+      }
+      lastStateRef.current = d as DashboardDTO
+      return d as DashboardDTO
+    },
     2500
   )
   const { toast } = useToast()
@@ -82,7 +140,10 @@ export function TeacherDashboard({
   const [dupPin, setDupPin] = useState('')
   const [duplicating, setDuplicating] = useState(false)
   // v2.4.0 : sauvegarde complète (JSON) — copie hors-ligne de toutes les
-  // données de la séance, à télécharger avant chaque mise à jour.
+  // données de la séance. v2.8.1 : le bouton revient dans l'en-tête du
+  // tableau de bord, à son ancienne place à côté de « Dupliquer »
+  // (demande de l'enseignante) ; le téléversement d'une sauvegarde vit
+  // désormais dans l'écran d'accueil enseignant.
   const [backingUp, setBackingUp] = useState(false)
   const { t } = useI18n()
 
@@ -98,6 +159,10 @@ export function TeacherDashboard({
         method: 'POST',
         body: JSON.stringify({ token, action, ...extra }),
       })
+      // v2.8.2 : l'action part immédiatement vers la version en ligne
+      // (si la synchronisation automatique est activée) — les étudiants
+      // de l'autre version n'attendent pas le prochain cycle de 5 s.
+      backgroundSync(code, token)
       await refresh()
       return true
     } catch (e) {
@@ -147,8 +212,10 @@ export function TeacherDashboard({
     }
   }
 
-  // Sauvegarde complète : télécharge un fichier JSON contenant questions,
-  // cas, équipes, étudiants, réponses, réclamations et évaluations.
+  // Sauvegarde complète (v2.8.1) : de retour dans l'en-tête du tableau de
+  // bord, à côté de « Dupliquer ». Le fichier .json produit se téléverse
+  // depuis l'écran d'accueil enseignant (« Téléverser une séance ») pour
+  // restaurer ou transférer la séance sur un autre appareil.
   const doBackup = async () => {
     setBackingUp(true)
     try {
@@ -157,12 +224,7 @@ export function TeacherDashboard({
         body: JSON.stringify({ token, action: 'export_backup' }),
       })
       const blob = new Blob([JSON.stringify(res, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `sauvegarde-tbl-${code}.json`
-      a.click()
-      URL.revokeObjectURL(url)
+      downloadBlob(blob, `sauvegarde-tbl-${code}.json`)
       toast({ title: t('Fichier de sauvegarde téléchargé.') })
     } catch (e) {
       toast({
@@ -177,6 +239,40 @@ export function TeacherDashboard({
 
   const ratQs = useMemo(() => data?.questions.filter((q) => q.phase === 'rat') ?? [], [data])
   const appQs = useMemo(() => data?.questions.filter((q) => q.phase === 'application') ?? [], [data])
+
+  // v2.8.2 : « Mes séances sur cet appareil » suit les renommages —
+  // le titre mémorisé à la création restait affiché après un changement
+  // de titre dans l'onglet Configurations (bug signalé par
+  // l'enseignante). Chaque rafraîchissement du tableau de bord met à
+  // jour le titre mémorisé (le jeton et la date de sauvegarde ne
+  // bougent pas, l'ordre de la liste reste stable).
+  useEffect(() => {
+    const title = data?.session.title
+    if (title) refreshTeacherSessionMeta(code, title)
+  }, [code, data?.session.title])
+
+  // v2.7.0 — Synchronisation automatique Internet ↔ réseau local.
+  // v2.8.2 : QUASI IMMÉDIATE — toutes les 5 secondes (au lieu de 30)
+  // + immédiatement après chaque action de l'enseignant (voir manage
+  // ci-dessous). v2.9.0 : le délai du cycle est réglable dans
+  // l'ESPACE ADMINISTRATEUR (/admin) — 2 s (très réactif) à 60 s
+  // (économe) ; le push n'envoie le miroir que si quelque chose a
+  // réellement changé (voir sync.ts). Silencieuse : une coupure réseau
+  // n'affiche rien, la séance continue. NB : déclaré AVANT les retours
+  // anticipés (règle des hooks React).
+  const [syncIntervalMs, setSyncIntervalMs] = useState(5000)
+  useEffect(() => {
+    loadAppConfig().then((c) => setSyncIntervalMs(c.syncIntervalMs))
+  }, [])
+  useEffect(() => {
+    if (!data?.session.code || data.session.deletedAt) return
+    const sessionCode = data.session.code
+    const id = setInterval(() => {
+      if (document.hidden) return
+      backgroundSync(sessionCode, token)
+    }, syncIntervalMs)
+    return () => clearInterval(id)
+  }, [data?.session.code, data?.session.deletedAt, token, syncIntervalMs])
 
   if (loading && !data) {
     return (
@@ -337,23 +433,27 @@ export function TeacherDashboard({
               <strong>{data.students.length}</strong> {t('étudiant(s) ·')}{' '}
               <strong>{data.teams.length}</strong> {t('équipe(s)')}
             </p>
+            {/* v2.9.0 — DOUBLE minuteur, comme demandé : (1) chronomètre
+                ASCENDANT de la phase en cours, toujours visible (durée
+                depuis le lancement) ; (2) pendant l'iRAT UNIQUEMENT, le
+                compte à rebours DESCENDANT synchronisé avec celui des
+                étudiants — il atteint 00:00 puis affiche « Temps écoulé »
+                (plus jamais un compteur qui remonte). */}
             <p className="flex items-center gap-2 text-stone-700">
               <Timer className="h-4 w-4 text-emerald-600" />
-              {status === 'irat' ? (
-                <>
-                  {t('Temps restant :')}{' '}
-                  <Countdown
-                    startedAt={data.session.phaseStartedAt}
-                    minutes={data.session.iratMinutes}
-                  />
-                </>
-              ) : (
-                <>
-                  {t('Phase en cours depuis :')}{' '}
-                  <ElapsedSince startedAt={data.session.phaseStartedAt} />
-                </>
-              )}
+              {t('Phase en cours depuis :')}{' '}
+              <ElapsedSince startedAt={data.session.phaseStartedAt} />
             </p>
+            {status === 'irat' && (
+              <p className="flex items-center gap-2 text-stone-700">
+                <Timer className="h-4 w-4 text-amber-600" />
+                {t('Temps restant (iRAT) :')}{' '}
+                <Countdown
+                  startedAt={data.session.phaseStartedAt}
+                  minutes={data.session.iratMinutes}
+                />
+              </p>
+            )}
             <p className="pl-6 text-xs text-stone-500">
               {t('Séance créée le {date} · rétention des données étudiantes : 4 mois', {
                 date: formatDate(new Date(data.session.createdAt)),
@@ -425,6 +525,12 @@ export function TeacherDashboard({
               </span>
             )}
           </TabsTrigger>
+          {/* v2.7.0 : rubrique « Configurations » — paramètres de la séance
+              (titre, PIN, durée), sauvegarde/téléversement, exclusion d'un
+              étudiant et synchronisation Internet ↔ réseau local. */}
+          <TabsTrigger value="config" className="flex-1 px-3 py-2 sm:flex-none">
+            {t('Configurations')}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -455,6 +561,12 @@ export function TeacherDashboard({
         </TabsContent>
         <TabsContent value="alerts" className="mt-4">
           <SignalementsTab data={data} />
+        </TabsContent>
+        {/* v2.7.0 : Configurations — tout ce qui n'est ni questions, ni
+            questionnaire, ni équipes : paramètres, sauvegarde, transfert,
+            exclusion d'étudiant, synchronisation. */}
+        <TabsContent value="config" className="mt-4">
+          <ConfigurationsTab data={data} manage={manage} token={token} refresh={refresh} />
         </TabsContent>
       </Tabs>
 
@@ -510,7 +622,31 @@ export function TeacherDashboard({
             <AlertDialogAction
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={async () => {
-                if (pendingPhase) await manage('set_phase', { phase: pendingPhase })
+                if (pendingPhase) {
+                  await manage('set_phase', { phase: pendingPhase })
+                  // v2.7.0 : fin de séance → synchronisation FINALE avec la
+                  // version en ligne (si une adresse est configurée) : tous
+                  // les résultats partent sur Internet, sans action
+                  // supplémentaire de l'enseignant.
+                  if (pendingPhase === 'finished') {
+                    const cfg = readSyncConfig(code)
+                    if (cfg?.url) {
+                      api(`/api/sessions/${code}/manage`, {
+                        method: 'POST',
+                        body: JSON.stringify({ token, action: 'sync_now', remoteUrl: cfg.url }),
+                      })
+                        .then(() => refresh())
+                        .catch(() =>
+                          toast({
+                            title: t('Synchronisation finale impossible'),
+                            description: t(
+                              'La séance est terminée et sauvegardée ici. Relancez la synchronisation depuis l’onglet « Configurations » quand la connexion reviendra.'
+                            ),
+                          })
+                        )
+                    }
+                  }
+                }
                 setPendingPhase(null)
               }}
             >
@@ -1168,6 +1304,43 @@ function OverviewPanel({
             'Le tableau ci-dessous vous montre les questions les moins bien comprises (en rouge) — c’est là que votre mini-cours sera le plus utile.'
           )}
         </InfoCard>
+
+        {/* v2.7.0 : écran d'attente des étudiants — les résultats n'apparaissent
+            sur leur téléphone QUE lorsque vous lancez le feedback (entre les
+            réclamations et ce moment, ils voient une page neutre : rien à
+            capturer, l'attention reste sur vous). */}
+        <div
+          className={cn(
+            'rounded-2xl border-2 p-5',
+            data.session.feedbackReady
+              ? 'border-emerald-200 bg-emerald-50'
+              : 'border-sky-300 bg-sky-50'
+          )}
+        >
+          {data.session.feedbackReady ? (
+            <p className="flex items-center gap-2 text-sm font-bold text-emerald-800">
+              <Check className="h-5 w-5" />
+              {t('Feedback lancé : les étudiants voient leurs résultats et les réponses correctes.')}
+            </p>
+          ) : (
+            <>
+              <p className="text-sm font-bold text-sky-900">{t('Les étudiants patientent')}</p>
+              <p className="mt-1 text-sm leading-relaxed text-sky-800">
+                {t(
+                  'Leur téléphone affiche une page d’attente neutre : ni notes, ni réponses correctes, rien à capturer d’écran. Commentez les résultats avec la classe, puis lancez le feedback quand vous êtes prêt — tout apparaîtra d’un coup sur leur écran.'
+                )}
+              </p>
+              <Button
+                className="mt-3 h-12 w-full bg-sky-600 text-base hover:bg-sky-700"
+                onClick={() => manage('launch_feedback')}
+              >
+                <Play className="mr-2 h-5 w-5" />
+                {t('Lancer le feedback')}
+              </Button>
+            </>
+          )}
+        </div>
+
         <div className="rounded-2xl border border-stone-200 bg-white p-4">
           <div className="space-y-3">
             {ratQs.map((q, qi) => {
@@ -1245,6 +1418,7 @@ function OverviewPanel({
       ...data.cases.map((c) => ({
         key: c.id,
         title: c.title,
+        opened: c.opened,
         questions: appQs.filter((q) => q.caseId === c.id),
       })),
       ...(appQs.some((q) => !q.caseId)
@@ -1252,6 +1426,7 @@ function OverviewPanel({
             {
               key: 'libres',
               title: t('Exercices d’application (ancien format)'),
+              opened: true,
               questions: appQs.filter((q) => !q.caseId),
             },
           ]
@@ -1271,13 +1446,71 @@ function OverviewPanel({
           )}
         </p>
 
+        {/* v2.7.0 : lancement des cas cliniques UN PAR UN. Chaque cas reste
+            INVISIBLE des étudiants (page d'attente neutre : ni énoncé, ni
+            questions) jusqu'à son lancement — expliquez le cas précédent à
+            voix haute, puis ouvrez le suivant quand la classe est prête. */}
+        {caseGroups.some((g) => g.key !== 'libres') && (
+          <div className="rounded-2xl border-2 border-lime-300 bg-lime-50 p-4">
+            <p className="text-sm font-bold text-lime-900">
+              {t('Lancement des cas cliniques')}
+            </p>
+            <p className="mt-0.5 text-xs leading-relaxed text-lime-800">
+              {t(
+                'Tant qu’un cas n’est pas lancé, les étudiants voient une page d’attente. Lancer un cas fait tourner la page de toute la classe sur ce cas — l’ancien se referme, vous seul pilotez. Relancer un cas plus ancien ramène toute la classe dessus.'
+              )}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {caseGroups.map((g, gi) =>
+                g.key === 'libres' ? null : (
+                  <Button
+                    key={g.key}
+                    className={cn(
+                      'h-12 text-sm font-semibold',
+                      g.opened
+                        ? 'border border-lime-400 bg-white text-lime-700 hover:bg-lime-100'
+                        : 'bg-lime-600 text-white hover:bg-lime-700'
+                    )}
+                    variant={g.opened ? 'outline' : 'default'}
+                    onClick={() => manage('open_case', { caseId: g.key })}
+                    disabled={g.opened}
+                  >
+                    {g.opened ? (
+                      <>
+                        <Check className="mr-2 h-4 w-4" />
+                        {t('Cas clinique {n} lancé', { n: gi + 1 })}
+                      </>
+                    ) : (
+                      <>
+                        <Play className="mr-2 h-4 w-4" />
+                        {t('Lancer le cas clinique {n}', { n: gi + 1 })}
+                      </>
+                    )}
+                  </Button>
+                )
+              )}
+            </div>
+          </div>
+        )}
+
         {caseGroups.map((g, gi) => (
           <section key={g.key} className="space-y-2">
-            <h3 className="flex items-center gap-2 text-sm font-bold text-stone-800">
+            <h3 className="flex flex-wrap items-center gap-2 text-sm font-bold text-stone-800">
               <span className="rounded-full bg-lime-600 px-2.5 py-0.5 text-xs font-bold text-white">
                 {t('Application {n}', { n: gi + 1 })}
               </span>
               {g.title}
+              {/* v2.7.0 : état de lancement du cas */}
+              {g.key !== 'libres' &&
+                (g.opened ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-lime-100 px-2 py-0.5 text-[10px] font-bold text-lime-700">
+                    <Check className="h-3 w-3" /> {t('lancé')}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-bold text-stone-600">
+                    <Lock className="h-3 w-3" /> {t('en attente de lancement')}
+                  </span>
+                ))}
             </h3>
             {g.questions.map((q, qi) => {
               const answeredTeams = new Set(
@@ -1391,6 +1624,10 @@ function OverviewPanel({
             />
           </div>
         </div>
+
+        {/* v2.7.0 : équipes qui n'ont PAS complètement évalué leurs pairs
+            — pour les solliciter avant la fin de la phase. */}
+        <PeerCompletenessCard data={data} />
       </div>
     )
   }
@@ -1426,17 +1663,102 @@ function OverviewPanel({
         </div>
       </div>
       <Button
-        variant="outline"
-        className="h-12 w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-        onClick={() => exportCsv(data, ratQs, appQs)}
+        className="h-12 w-full bg-emerald-600 text-white hover:bg-emerald-700"
+        onClick={() => exportXlsx(data, ratQs, appQs)}
       >
         <Download className="mr-2 h-4 w-4" />
-        {t('Exporter tous les résultats (CSV pour Excel)')}
+        {t('Exporter les résultats — Excel (3 feuilles)')}
       </Button>
+      <p className="text-xs leading-relaxed text-stone-500">
+        {t(
+          'Un seul fichier Excel : feuille 1 « Résultats », feuille 2 « Docimologie », feuille 3 « Questionnaire ». Les exports CSV restent disponibles dans leurs rubriques : « Résultats », « Statistiques » et « Questionnaire ».'
+        )}
+      </p>
       <p className="text-xs text-stone-500">
         {t(
           'Astuce : pour refaire une séance similaire, créez une nouvelle séance et reprenez vos questions.'
         )}
+      </p>
+    </div>
+  )
+}
+
+// v2.7.0 — Carte « équipes à solliciter » : équipes dont un ou plusieurs
+// membres n'ont pas encore évalué TOUS leurs coéquipiers. Affichée en phase
+// d'évaluation par les pairs (rubrique 7 du déroulé) : l'enseignant voit
+// immédiatement qui relancer pour compléter.
+function PeerCompletenessCard({ data }: { data: DashboardDTO }) {
+  const { t } = useI18n()
+  const rows = data.teams
+    .map((tm) => ({
+      team: tm,
+      members: data.students.filter((s) => s.teamId === tm.id),
+    }))
+    .filter(({ members }) => members.length > 1)
+    .map(({ team, members }) => {
+      const details = members.map((m) => {
+        const teammateIds = members.filter((x) => x.id !== m.id).map((x) => x.id)
+        const done = data.peerEvals.filter(
+          (e) => e.evaluatorId === m.id && teammateIds.includes(e.evaluatedId)
+        ).length
+        return { name: m.name, done, expected: teammateIds.length }
+      })
+      return {
+        team,
+        details,
+        complete: details.every((d) => d.done >= d.expected),
+      }
+    })
+
+  if (rows.length === 0) return null
+  const incomplete = rows.filter((r) => !r.complete)
+
+  if (incomplete.length === 0) {
+    return (
+      <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-4 text-center">
+        <p className="flex items-center justify-center gap-2 text-sm font-bold text-emerald-800">
+          <Check className="h-5 w-5" />
+          {t('Toutes les équipes ont complété leurs évaluations de pairs.')}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4">
+      <p className="text-sm font-bold text-amber-900">
+        {t('Équipes à solliciter ({n})', { n: incomplete.length })}
+      </p>
+      <p className="mt-0.5 text-sm text-amber-800">
+        {t(
+          'Ces étudiants n’ont pas encore évalué tous leurs coéquipiers — invitez-les à terminer avant la fin de la phase.'
+        )}
+      </p>
+      <div className="mt-3 space-y-2">
+        {incomplete.map(({ team, details }) => (
+          <div key={team.id} className="rounded-xl bg-white p-3">
+            <p className="text-sm font-bold text-stone-800">{team.name}</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {details
+                .filter((d) => d.done < d.expected)
+                .map((d) => (
+                  <span
+                    key={d.name}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800"
+                  >
+                    <Users className="h-3 w-3" />
+                    {d.name}
+                    <span className="font-mono">
+                      {d.done}/{d.expected}
+                    </span>
+                  </span>
+                ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] text-amber-700">
+        {t('Compteur : évaluations données par l’étudiant sur ses coéquipiers.')}
       </p>
     </div>
   )

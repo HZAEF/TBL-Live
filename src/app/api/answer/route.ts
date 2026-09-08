@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/answer — réponse individuelle (iRAT)
 export async function POST(req: NextRequest) {
@@ -84,6 +85,11 @@ export async function POST(req: NextRequest) {
       }
       throw e
     }
+
+    // v2.9.0 : la réponse change l'état vu par l'étudiant (sa propre
+    // réponse) et par l'enseignant (progression) → compteurs + 1 (le
+    // sondage allégé des autres étudiants renouvelle alors leur état).
+    await bumpRevisions(student.sessionId)
 
     // Pas de divulgation de la bonne réponse pendant l'iRAT
     return NextResponse.json({ ok: true })

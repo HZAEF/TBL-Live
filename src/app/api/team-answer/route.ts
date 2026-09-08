@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 
 // Barème IF-AT : tentative 1 = 4 pts, tentative 2 = 2 pts, tentative 3 = 1 pt, ensuite 0
 const TRAT_POINTS = [4, 2, 1, 0]
@@ -107,6 +108,9 @@ export async function POST(req: NextRequest) {
     if ('error' in result && result.error) {
       return NextResponse.json({ error: result.error }, { status: 409 })
     }
+
+    // v2.9.0 : tentative tRAT enregistrée → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json(result)
   } catch (e) {

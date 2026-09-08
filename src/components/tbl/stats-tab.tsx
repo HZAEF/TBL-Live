@@ -18,8 +18,7 @@ import {
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import type { DashboardDTO } from '@/lib/tbl-types'
-import { LETTERS } from '@/lib/tbl-types'
-import { t, useI18n, formatDate } from '@/lib/i18n'
+import { useI18n } from '@/lib/i18n'
 import {
   alphaInterp,
   analyzeSection,
@@ -42,6 +41,7 @@ import {
   type SectionKind,
   type Tone,
 } from '@/lib/docimology'
+import { buildDocimologyMatrix, exportDocimologyCsvFromMatrix } from './teacher-tabs'
 
 // ---------- Petites aides de rendu ----------
 
@@ -724,6 +724,9 @@ export function StatsTab({
 
 // ================= Export CSV =================
 
+// v2.7.0 : la matrice docimologique est construite UNE fois (teacher-tabs)
+// et partagée entre le CSV de cette rubrique et la feuille 2 du classeur
+// Excel — aucune divergence possible entre les deux exports.
 export function exportDocimologyCsv(
   data: DashboardDTO,
   irat: SectionAnalysis | null,
@@ -732,209 +735,6 @@ export function exportDocimologyCsv(
   comparison: ComparisonRow[] | null,
   flagged: FlaggedQuestion[]
 ) {
-  const esc = (v: string | number | null | undefined) => {
-    let s = String(v ?? '')
-    // Anti « CSV injection » (formules Excel) — même garde-fou que l'export
-    // des résultats : apostrophe initiale sur =, +, -, @, tab, CR.
-    if (/^[=+\-@\t\r]/.test(s)) {
-      s = "'" + s
-    }
-    return `"${s.replace(/"/g, '""')}"`
-  }
-  /** nombre décimal français : 0,625 */
-  const nb = (x: number | null, decimals = 2) =>
-    x === null || !Number.isFinite(x) ? '' : x.toFixed(decimals).replace('.', ',')
-  /** pourcentage : 62,5 */
-  const pc = (x: number | null) => (x === null ? '' : (x * 100).toFixed(1).replace('.', ','))
-
-  const rows: string[] = []
-  const line = (...cells: (string | number | null | undefined)[]) =>
-    rows.push(cells.map(esc).join(';'))
-
-  // Libellés composés « Application 2 Q3 » → mot Application traduit
-  const fmtQLabel = (label: string): string =>
-    label
-      .replace(/^Application ex\.(\d+)$/, (_m, n) => `${t('Exercice')} ${n}`)
-      .replace(/^Application (\d+) Q(\d+)$/, (_m, a, q) => `${t('Application')} ${a} Q${q}`)
-
-  line(`STATISTIQUES DOCIMOLOGIQUES — ${data.session.title} (code ${data.session.code})`)
-  line(
-    t('Exporté le {date} — phase : {phase} — {n} étudiant(s), {m} équipe(s)', {
-      date: formatDate(new Date(), {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      }),
-      phase: data.session.status,
-      n: data.students.length,
-      m: data.teams.length,
-    })
-  )
-  rows.push('')
-
-  // ---- 1. Synthèse par section ----
-  line(
-    t('1. SYNTHÈSE PAR SECTION')
-  )
-  line(
-    t('Section'),
-    t('Répondants'),
-    t('Questions'),
-    t('Score max'),
-    t('Moyenne (points)'),
-    t('Écart-type'),
-    t('Moyenne /20'),
-    t('Médiane (points)'),
-    'Q1',
-    'Q3',
-    'Min',
-    'Max',
-    t('Fidélité (alpha)'),
-    t('Interprétation fidélité'),
-    t('SEM (points)'),
-    t('Répondants complets')
-  )
-  const sections: [string, SectionAnalysis | null][] = [
-    [t('iRAT (individuel)'), irat],
-    [t('tRAT (équipes)'), trat],
-    [t('Application (équipes)'), app],
-  ]
-  for (const [label, a] of sections) {
-    if (!a) continue
-    const tst = a.test
-    line(
-      label,
-      tst.n,
-      tst.k,
-      tst.maxScore,
-      nb(tst.mean),
-      nb(tst.sd),
-      nb(tst.mean20, 1),
-      nb(tst.median),
-      nb(tst.q1),
-      nb(tst.q3),
-      tst.min,
-      tst.max,
-      nb(tst.alpha),
-      tst.alpha !== null ? t(alphaInterp(tst.alpha).label) : '',
-      nb(tst.sem),
-      tst.nComplete
-    )
-  }
-  rows.push('')
-
-  // ---- 2. Analyse des questions ----
-  const itemRows = (kindLabel: string, a: SectionAnalysis, isTrat: boolean, isApp: boolean) => {
-    line(`2. ${t('ANALYSE DES QUESTIONS')} — ${kindLabel}`)
-    const header = isTrat
-      ? [
-          t('Question'), t('Intitulé'), t('Équipes'), t('Réussite 1er essai (%)'), t('Réussite finale (%)'),
-          t('Points moyens (sur 4)'), t('Équipes à 4 pts'), t('à 2 pts'), t('à 1 pt'), t('à 0 pt'),
-          t('Indice de discrimination (D)'), t('Interprétation D'), t('r point-bisériale'),
-        ]
-      : [
-          ...(isApp ? [t('Cas')] : []), t('Question'), t('Intitulé'), t('Répondants'),
-          ...(isApp ? [t('Bonnes réponses')] : []), t('Indice de difficulté (p)'),
-          t('Interprétation difficulté'), t('Indice de discrimination (D)'), t('Interprétation D'),
-          t('r point-bisériale'),
-        ]
-    const optHeader = LETTERS.map((l) => `${t('Choix')} ${l} (%)`)
-    line(...header, ...optHeader, ...(isTrat ? [] : [t('Sans réponse')]))
-    for (const it of a.items) {
-      const optByIndex = new Map(it.options.map((o) => [o.index, o]))
-      const optCells = Array.from({ length: 6 }, (_, i) => pc(optByIndex.get(i)?.pct ?? null))
-      const base = isApp
-        ? [fmtQLabel(it.question.caseLabel ?? ''), fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
-        : isTrat
-          ? [fmtQLabel(it.question.label), it.question.text, it.n]
-          : [fmtQLabel(it.question.label), it.question.text, it.n, it.nCorrect]
-      const stats = isTrat
-        ? [
-            pc(it.pFirst), pc(it.p), nb(it.avgScore),
-            it.ifat?.c4 ?? '', it.ifat?.c2 ?? '', it.ifat?.c1 ?? '', it.ifat?.c0 ?? '',
-            nb(it.d),
-            it.d !== null ? t(discriminationInterp(it.d).label) : '',
-            nb(it.rpbs),
-          ]
-        : [
-            pc(it.p),
-            it.p !== null ? t(difficultyInterp(it.p).label) : '',
-            nb(it.d),
-            it.d !== null ? t(discriminationInterp(it.d).label) : '',
-            nb(it.rpbs),
-          ]
-      line(...base, ...stats, ...optCells, ...(isTrat ? [] : [it.nMissing]))
-    }
-    rows.push('')
-  }
-  if (irat) itemRows(t('iRAT (répondants : étudiants)'), irat, false, false)
-  if (trat)
-    itemRows(
-      t('tRAT (répondants : équipes — choix du 1ᵉʳ essai — barème IF-AT 4/2/1/0)'),
-      trat,
-      true,
-      false
-    )
-  if (app)
-    itemRows(t('APPLICATION ET CAS CLINIQUES (répondants : équipes)'), app, false, true)
-
-  // ---- 3. Comparaison iRAT → tRAT ----
-  if (comparison && irat && trat) {
-    line(`3. ${t('COMPARAISON iRAT → tRAT (effet équipe)')}`)
-    line(
-      t('Question'),
-      t('Intitulé'),
-      t('Réussite individus (%)'),
-      t('Équipes 1er essai (%)'),
-      t('Équipes au final (%)'),
-      t('Gain (points de %)')
-    )
-    for (const row of comparison) {
-      line(
-        fmtQLabel(row.question.label),
-        row.question.text,
-        pc(row.pIrat),
-        pc(row.pTratFirst),
-        pc(row.pTratFinal),
-        row.gain !== null ? (row.gain * 100).toFixed(1).replace('.', ',') : ''
-      )
-    }
-    line(
-      t('Moyenne /20'),
-      '',
-      nb(irat.test.mean20, 1),
-      '',
-      nb(trat.test.mean20, 1),
-      irat.test.mean20 !== null && trat.test.mean20 !== null
-        ? nb(trat.test.mean20 - irat.test.mean20, 1)
-        : ''
-    )
-    rows.push('')
-  }
-
-  // ---- 4. Distribution des notes ----
-  line(`4. ${t('RÉPARTITION DES NOTES (sur 20)')}`)
-  line(t('Section'), t('Classe'), t('Effectif'))
-  for (const [label, a] of sections) {
-    if (!a) continue
-    for (const bin of a.test.distribution) {
-      line(label, bin.label, bin.count)
-    }
-  }
-  rows.push('')
-
-  // ---- 5. Questions à revoir ----
-  line(`5. ${t('QUESTIONS À REVOIR (signalement automatique)')}`)
-  line(t('Section'), t('Question'), t('Intitulé'), t('Points à surveiller'))
-  for (const f of flagged) {
-    line(t(KIND_LABEL[f.kind]), f.label, f.text, f.problems.join(' ; '))
-  }
-
-  // BOM UTF-8 + séparateur « ; » (Excel francophone)
-  const blob = new Blob(['\uFEFF' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `docimologie-tbl-${data.session.code}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  const matrix = buildDocimologyMatrix(data, irat, trat, app, comparison, flagged)
+  exportDocimologyCsvFromMatrix(matrix, data.session.code)
 }

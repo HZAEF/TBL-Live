@@ -5,47 +5,60 @@ import { Check, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LETTERS, PHASE_INFO, type Phase } from '@/lib/tbl-types'
 import { useI18n } from '@/lib/i18n'
+import { serverNowMs } from '@/lib/server-clock'
 
 // ---------- Minute / compte à rebours ----------
 
+// v2.9.0 : tous les minuteurs interrogent l'horloge du SERVEUR
+// reconstituée (server-clock.ts) — enseignant et étudiants voient
+// exactement le même chronomètre, même si l'horloge de l'appareil
+// est fausse. L'iRAT descend jusqu'à 00:00 puis affiche
+// « Temps écoulé » (fin nette, pas de compteur qui remonte).
+
 export function Countdown({ startedAt, minutes }: { startedAt: string; minutes: number }) {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => serverNowMs())
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
+    const id = setInterval(() => setNow(serverNowMs()), 1000)
     return () => clearInterval(id)
   }, [])
   const elapsed = Math.floor((now - new Date(startedAt).getTime()) / 1000)
   const remaining = minutes * 60 - elapsed
   const over = remaining < 0
-  const abs = Math.abs(remaining)
-  const mm = String(Math.floor(abs / 60)).padStart(2, '0')
-  const ss = String(abs % 60).padStart(2, '0')
+  const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
+  const ss = String(remaining % 60).padStart(2, '0')
   const { t } = useI18n()
+  if (over) {
+    return (
+      <span className="font-mono font-semibold tabular-nums text-red-600">
+        {t('Temps écoulé')}
+      </span>
+    )
+  }
   return (
     <span
       className={cn(
         'font-mono font-semibold tabular-nums',
-        over ? 'text-red-600' : remaining < 60 ? 'text-amber-600' : 'text-emerald-700'
+        remaining < 60 ? 'text-amber-600' : 'text-emerald-700'
       )}
     >
-      {over ? t('Temps écoulé (+') : ''}
       {mm}:{ss}
-      {over ? ')' : ''}
     </span>
   )
 }
 
 export function ElapsedSince({ startedAt }: { startedAt: string }) {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => serverNowMs())
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
+    const id = setInterval(() => setNow(serverNowMs()), 1000)
     return () => clearInterval(id)
   }, [])
   const elapsed = Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000))
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
+  const hh = Math.floor(elapsed / 3600)
+  const mm = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0')
   const ss = String(elapsed % 60).padStart(2, '0')
   return (
     <span className="font-mono tabular-nums text-stone-600">
+      {hh > 0 ? `${hh}:` : ''}
       {mm}:{ss}
     </span>
   )

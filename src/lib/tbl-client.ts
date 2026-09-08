@@ -42,7 +42,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 // Le délai peut être un nombre fixe, ou une FONCTION de la dernière donnée
 // reçue (délai adaptatif — v2.4.0 : l'écran étudiant sonde à 2,5 s pendant
 // les tests et 5 s pendant les phases d'attente, pour alléger la base).
+// v2.9.0 : un petit décalage aléatoire (0 à 500 ms) est ajouté à CHAQUE
+// cycle — avec 65 étudiants, les sondages ne partent plus tous exactement
+// au même moment (pics de charge) mais s'étalent naturellement dans le
+// temps : le serveur et la base restent fluides.
 export type PollInterval<T> = number | ((data: T | null) => number)
+
+const POLL_JITTER_MS = 500
 
 export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2500) {
   const [data, setData] = useState<T | null>(null)
@@ -73,7 +79,7 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2
           setLoading(false)
           const iv = intervalRef.current
           const delay = typeof iv === 'function' ? iv(dataRef.current) : iv
-          timer = setTimeout(run, delay)
+          timer = setTimeout(run, delay + Math.random() * POLL_JITTER_MS)
         }
       }
     }
@@ -149,6 +155,20 @@ export function getTeacherSessions(): Record<string, StoredTeacherSession> {
 export function saveTeacherSession(s: StoredTeacherSession) {
   const all = getTeacherSessions()
   all[s.code] = s
+  writeJson(TEACHER_KEY, all)
+}
+
+// v2.8.2 : met à jour le TITRE mémorisé d'une séance de « Mes séances
+// sur cet appareil » (renommage via l'onglet Configurations). Ne crée
+// JAMAIS d'entrée (la séance doit déjà être mémorisée sur cet appareil)
+// et ne touche ni au jeton ni à la date de sauvegarde — l'ordre de la
+// liste reste stable. Corrige le bug : le titre de création restait
+// affiché après un changement de titre.
+export function refreshTeacherSessionMeta(code: string, title: string) {
+  const all = getTeacherSessions()
+  const cur = all[code]
+  if (!cur || cur.title === title) return
+  all[code] = { ...cur, title }
   writeJson(TEACHER_KEY, all)
 }
 

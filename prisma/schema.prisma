@@ -21,12 +21,22 @@ model Session {
   id            String   @id @default(cuid())
   code          String   @unique // code à 6 caractères pour rejoindre
   title         String
-  teacherPin    String // code PIN enseignant (6 caractères et plus, lettres + chiffres)
+  teacherPin    String // code PIN enseignant (haché bcrypt, 6 caractères et plus)
   teacherToken  String // jeton secret enseignant (accès tableau de bord)
   status        String   @default("lobby") // lobby | irat | trat | appeal | feedback | application | peer | finished
   iratMinutes   Int      @default(10) // durée conseillée du iRAT
   phaseStartedAt DateTime @default(now()) // début de la phase en cours
   revealed      Boolean  @default(false) // révélation simultanée des réponses d'application
+  // v2.7.0 : écran d'attente avant le feedback — entre les réclamations et
+  // le feedback, les étudiants voient une page neutre (aucun résultat, rien
+  // à capturer) tant que l'enseignant n'a pas cliqué « Lancer le feedback ».
+  feedbackReady Boolean  @default(false)
+  // v2.7.0 : date du dernier modifications des paramètres (fusion Internet
+  // ↔ réseau local : dernier écrit gagne, colonne additive nullable).
+  updatedAt     DateTime?
+  // v2.7.0 : date de la dernière synchronisation réussie avec la version
+  // en ligne (affichée dans l'onglet Configurations, null = jamais).
+  syncedAt      DateTime?
   // Protection anti force-brute du PIN enseignant (Vercel est serverless :
   // la mémoire ne persiste pas entre les requêtes, on stocke donc en base).
   // 5 tentatives fausses → verrouillage temporaire de 15 minutes.
@@ -40,6 +50,18 @@ model Session {
   // les étudiants (noms, réponses, réclamations, évaluations par les pairs)
   // sont effacées — la séance (QCM, cas cliniques, réglages) est conservée.
   dataPurgedAt   DateTime?
+  // v2.9.0 — Sondage allégé pour les grandes classes. Chaque écriture qui
+  // change ce que voient les ÉTUDIANTS (phase, question, réponse, équipe,
+  // révélation…) incrémente « revision » : un étudiant qui renvoie son
+  // dernier numéro reçoit une réponse minuscule « rien n'a changé » au
+  // lieu de l'état complet. Divise la charge de la base quand rien ne
+  // bouge (65 étudiants = 65 réponses légères au lieu de 65 états
+  // complets à chaque cycle).
+  revision       Int      @default(0)
+  // v2.9.0 — Même principe pour le tableau de bord ENSEIGNANT : compteur
+  // séparé, incrémenté AUSSI par les signalements anti-capture (visibles
+  // par l'enseignant, sans intérêt pour les étudiants → pas de « revision »).
+  revisionTeacher Int     @default(0)
   createdAt     DateTime @default(now())
 
   teams    Team[]
@@ -54,6 +76,10 @@ model Session {
 
 // Cas clinique d'application : un énoncé + 3 à 5 QCU résolues en équipe.
 // L'affichage étudiant se fait un cas à la fois.
+// v2.7.0 : chaque cas est OUVERT par l'enseignant (bouton « Lancer le cas
+// clinique N ») — avant son lancement, les étudiants voient une page
+// d'attente neutre (ni énoncé, ni questions) : l'enseignant peut expliquer
+// chaque cas séparément, sans avance des équipes rapides.
 model Case {
   id        String  @id @default(cuid())
   sessionId String
@@ -61,6 +87,8 @@ model Case {
   title     String  // ex. « Cas clinique — Mme A., 62 ans »
   intro     String? // énoncé / vignette du cas
   order     Int     @default(0)
+  opened    Boolean @default(false) // v2.7.0 : cas lancé par l'enseignant
+  updatedAt DateTime? // v2.7.0 : fusion Internet ↔ réseau local
 
   questions Question[]
 
@@ -76,6 +104,8 @@ model Team {
   // L'équipe a signalé qu'elle n'a (plus) de réclamation : quand toutes les
   // équipes actives ont répondu, la phase passe automatiquement au feedback.
   appealsDone Boolean @default(false)
+  // v2.7.0 : fusion Internet ↔ réseau local (résolution des conflits)
+  updatedAt DateTime?
 
   students   Student[]
   answers    Answer[] // réponses tRAT (par équipe)
@@ -98,6 +128,8 @@ model Student {
   // et plus, chiffres/lettres) — les comptes antérieurs gardent leur code
   // généré automatiquement (6 caractères), parfaitement compatible.
   recoveryCode String  @default("")
+  // v2.7.0 : fusion Internet ↔ réseau local (changement d'équipe, etc.)
+  updatedAt DateTime?
   // v2.6.0 — questionnaire TBL-SAI : date de soumission (null = pas encore
   // répondu → la note finale et le rang restent masqués) et commentaire
   // libre facultatif transmis avec les réponses.
@@ -128,6 +160,8 @@ model Question {
   order     Int     @default(0)
   caseId    String? // cas clinique d'application (null = ancien format / question RAT)
   case      Case?   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  // v2.7.0 : fusion Internet ↔ réseau local (édition par l'enseignant)
+  updatedAt DateTime?
 
   answers    Answer[]
   appeals    Appeal[]
@@ -151,6 +185,8 @@ model Answer {
   isCorrect  Boolean
   score      Float    @default(0) // iRAT : 1 pt ; tRAT : 4 / 2 / 1 / 0
   createdAt  DateTime @default(now())
+  // v2.7.0 : fusion Internet ↔ réseau local (réclamation acceptée → 4 pts)
+  updatedAt  DateTime?
 
   // Une seule réponse iRAT par (étudiant, question) : les tentatives tRAT
   // (studentId = null, NULL ≠ NULL en SQL) ne sont pas affectées. Empêche
@@ -180,6 +216,8 @@ model Appeal {
   text       String // justification de l'équipe
   status     String   @default("pending") // pending | accepted | rejected
   createdAt  DateTime @default(now())
+  // v2.7.0 : fusion Internet ↔ réseau local (décision de l'enseignant)
+  updatedAt  DateTime?
 
   @@index([sessionId])
 }
@@ -266,6 +304,8 @@ model SaiItem {
   reversed  Boolean @default(false)
   order     Int     @default(0)
   createdAt DateTime @default(now())
+  // v2.7.0 : fusion Internet ↔ réseau local (édition par l'enseignant)
+  updatedAt DateTime?
 
   responses SaiResponse[]
 
@@ -287,4 +327,30 @@ model SaiResponse {
   @@unique([studentId, itemId])
 
   @@index([studentId])
+}
+
+// ============================================================
+// v2.9.0 — Espace administrateur de l'application
+// Une seule ligne (id = "singleton") :
+//  - mot de passe administrateur (bcrypt) — vide à l'origine :
+//    la première visite de /admin propose de le choisir ;
+//  - jeton de session (hash SHA-256 + expiration 12 h) posé en
+//    cookie HttpOnly après connexion ;
+//  - verrouillage anti force-brute (5 essais → 15 minutes) ;
+//  - délai de la synchronisation Internet ↔ réseau local (ms) ;
+//  - personnalisations de texte : { "texte d'origine": "texte voulu" }.
+//    Elles s'appliquent dans toutes les langues et restent
+//    modifiables ou réinitialisables à tout moment.
+// ============================================================
+model AdminSetting {
+  id             String    @id @default("singleton")
+  passwordHash   String    @default("")
+  loginAttempts  Int       @default(0)
+  lockedUntil    DateTime?
+  tokenHash      String?
+  tokenExpiresAt DateTime?
+  syncIntervalMs Int       @default(5000)
+  textOverrides  String    @default("{}")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }

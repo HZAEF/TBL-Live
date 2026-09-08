@@ -1,6 +1,6 @@
 'use client'
 
-import { Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -38,6 +38,21 @@ export function QuestionEditor({
     const choices = [...value.choices]
     choices[i] = v
     onChange({ ...value, choices })
+  }
+  // v2.9.0 — Déplacer une réponse (flèches ↑ / ↓ à gauche du choix) :
+  // la ligne échange sa place avec la voisine et la BONNE réponse
+  // suit son texte (le marqueur vert accompagne la ligne déplacée).
+  // À l'enregistrement, le serveur répercute le déplacement sur les
+  // réponses déjà enregistrées : rien n'est faussé.
+  const moveChoice = (i: number, direction: -1 | 1) => {
+    const j = i + direction
+    if (j < 0 || j >= value.choices.length) return
+    const choices = [...value.choices]
+    ;[choices[i], choices[j]] = [choices[j], choices[i]]
+    let correct = value.correct
+    if (correct === i) correct = j
+    else if (correct === j) correct = i
+    onChange({ ...value, choices, correct })
   }
   const removeChoice = (i: number) => {
     if (value.choices.length <= 2) return
@@ -132,7 +147,31 @@ export function QuestionEditor({
 
       <div className="mt-3 space-y-2">
         {value.choices.map((c, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div key={i} className="flex items-center gap-1.5">
+            {/* v2.9.0 — Réordonner les réponses de la question : la
+                réponse B peut devenir la réponse E, etc. */}
+            <div className="flex shrink-0 flex-col">
+              <button
+                type="button"
+                onClick={() => moveChoice(i, -1)}
+                disabled={i === 0}
+                aria-label={t('Monter la réponse {l}', { l: LETTERS[i] })}
+                title={t('Monter la réponse {l}', { l: LETTERS[i] })}
+                className="flex h-4 w-6 items-center justify-center rounded text-stone-400 hover:bg-stone-100 hover:text-stone-700 disabled:opacity-25 disabled:hover:bg-transparent"
+              >
+                <ArrowUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveChoice(i, 1)}
+                disabled={i === value.choices.length - 1}
+                aria-label={t('Descendre la réponse {l}', { l: LETTERS[i] })}
+                title={t('Descendre la réponse {l}', { l: LETTERS[i] })}
+                className="flex h-4 w-6 items-center justify-center rounded text-stone-400 hover:bg-stone-100 hover:text-stone-700 disabled:opacity-25 disabled:hover:bg-transparent"
+              >
+                <ArrowDown className="h-3 w-3" />
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => onChange({ ...value, correct: i })}

@@ -2,12 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionByCode, parseChoices, extractToken, safeEqualStrings } from '@/lib/tbl'
 import { applyLifecycle } from '@/lib/session-lifecycle'
+import { readRevParam } from '@/lib/revision'
 
 // GET /api/sessions/[code]/dashboard — données complètes du tableau de bord
 // enseignant. Jeton transmis par l'en-tête « Authorization: Bearer … » (les
 // URL des appels API ne contiennent plus le jeton → il n'apparaît pas dans
 // les journaux serveur) ; le repli ?token= reste accepté (onglets ouverts
 // avant une mise à jour de l'application).
+//
+// v2.9.0 — SONDAGE ALLÉGÉ : ?rev=N → si le compteur enseignant de la
+// séance vaut toujours N, réponse minuscule { unchanged: true } (une
+// requête au lieu de quatorze) ; le moindre changement (réponse
+// d'étudiant, signalement, phase…) redonne l'état complet.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
@@ -34,7 +40,18 @@ export async function GET(
       )
     }
 
-    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments] =
+    // v2.9.0 — rien n'a changé depuis le dernier sondage du tableau de
+    // bord : réponse minuscule, sans reconstituer l'état complet.
+    const clientRev = readRevParam(req.nextUrl)
+    if (clientRev !== null && clientRev === live.revisionTeacher) {
+      return NextResponse.json({
+        unchanged: true,
+        revision: live.revisionTeacher,
+        serverNow: new Date().toISOString(),
+      })
+    }
+
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments, saiDetailedResponses] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
@@ -124,6 +141,14 @@ export async function GET(
           orderBy: [{ saiCompletedAt: 'asc' }],
           select: { name: true, saiComment: true, saiCompletedAt: true },
         }),
+        // v2.7.0 : réponses individuelles au questionnaire (matrice
+        // étudiant × item pour l'export CSV/Excel, onglet Questionnaire
+        // et feuille 3 du classeur Excel).
+        db.saiResponse.findMany({
+          where: { student: { sessionId: session.id } },
+          orderBy: { createdAt: 'asc' },
+          select: { studentId: true, itemId: true, value: true },
+        }),
       ])
 
     // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
@@ -142,6 +167,10 @@ export async function GET(
     questions.sort((a, b) => phaseRank(a.phase) - phaseRank(b.phase) || a.order - b.order)
 
     return NextResponse.json({
+      // v2.9.0 : compteur enseignant (sondage allégé) + heure serveur
+      // (minuteur iRAT synchronisé avec celui des étudiants).
+      revision: live.revisionTeacher,
+      serverNow: new Date().toISOString(),
       session: {
         id: live.id,
         code: live.code,
@@ -150,6 +179,10 @@ export async function GET(
         iratMinutes: live.iratMinutes,
         phaseStartedAt: live.phaseStartedAt,
         revealed: live.revealed,
+        // v2.7.0 : écran d'attente avant le feedback + date de dernière
+        // synchronisation avec la version en ligne (onglet Configurations).
+        feedbackReady: live.feedbackReady,
+        syncedAt: live.syncedAt ? live.syncedAt.toISOString() : null,
         createdAt: live.createdAt,
         // Corbeille (null = séance active) et purge des données étudiantes
         deletedAt: live.deletedAt,
@@ -169,6 +202,9 @@ export async function GET(
         title: c.title,
         intro: c.intro,
         order: c.order,
+        // v2.7.0 : cas lancé par l'enseignant (bouton « Lancer le cas
+        // clinique N ») — false = étudiants en page d'attente.
+        opened: c.opened,
       })),
       teams: teams.map((t) => ({
         id: t.id,
@@ -198,6 +234,9 @@ export async function GET(
       // v2.6.0 — questionnaire TBL-SAI : items + agrégats par item +
       // commentaires. Les moyennes de sous-échelles sont calculées côté
       // client (inversion des items négatifs, libellés i18n).
+      // v2.7.0 — réponses individuelles (matrice étudiant × item des
+      // exports CSV/Excel du questionnaire).
+      saiResponses: saiDetailedResponses,
       saiItems: saiItems.map((it) => ({
         id: it.id,
         subscale: it.subscale as 'accountability' | 'preference' | 'satisfaction',

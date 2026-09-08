@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/appeal-done — l'équipe signale qu'elle n'a (plus) de réclamation.
 // Quand toutes les équipes actives (au moins un étudiant) ont répondu,
@@ -60,9 +61,20 @@ export async function POST(req: NextRequest) {
     if (allDone) {
       await db.session.update({
         where: { id: student.sessionId },
-        data: { status: 'feedback', phaseStartedAt: new Date() },
+        data: {
+          status: 'feedback',
+          phaseStartedAt: new Date(),
+          // v2.7.0 : passage automatique → les étudiants voient d'abord
+          // l'écran d'attente ; l'enseignant lance l'affichage des
+          // résultats avec « Lancer le feedback ».
+          feedbackReady: false,
+        },
       })
     }
+
+    // v2.9.0 : progression des réclamations (voire passage au feedback)
+    // → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json({ ok: true, advanced: allDone, doneCount, total })
   } catch (e) {

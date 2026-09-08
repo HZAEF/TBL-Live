@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/peer — évaluation par les pairs (coéquipiers)
 export async function POST(req: NextRequest) {
@@ -87,6 +88,9 @@ export async function POST(req: NextRequest) {
         })
       }
     }
+
+    // v2.9.0 : évaluations par les pairs enregistrées → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json({ ok: true })
   } catch (e) {

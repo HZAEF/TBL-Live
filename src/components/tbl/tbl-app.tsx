@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import { initLangFromStorage, useI18n } from '@/lib/i18n'
+import { loadAppConfig } from '@/lib/app-config'
 import { LangPicker } from './lang-picker'
 
 type Role = 'home' | 'teacher' | 'student'
@@ -75,6 +76,14 @@ export function TblApp() {
     initLangFromStorage()
   }, [])
 
+  // v2.9.0 — Configuration publique de l'application (une requête
+  // minuscule au démarrage) : délai de synchronisation + textes
+  // personnalisés par l'administrateur (/admin). En cas d'échec
+  // (hors ligne, base indisponible), les réglages d'origine s'appliquent.
+  useEffect(() => {
+    loadAppConfig()
+  }, [])
+
   return (
     <div className="flex min-h-screen flex-col bg-stone-50">
       <header className="sticky top-0 z-40 border-b border-stone-200 bg-white/90 backdrop-blur">
@@ -117,11 +126,22 @@ export function TblApp() {
               'TBL Live — Application libre d’apprentissage en équipe, pour l’enseignement.'
             )}
           </p>
-          <p>
-            {t(
-              'iRAT · tRAT · Réclamations · Application · Évaluation par les pairs'
-            )}
-          </p>
+          <div className="flex items-center gap-3">
+            <p>
+              {t(
+                'iRAT · tRAT · Réclamations · Application · Évaluation par les pairs'
+              )}
+            </p>
+            {/* v2.9.0 — accès discret à l'espace administrateur (mot de
+                passe propre, voir /admin). */}
+            <a
+              href="/admin"
+              className="rounded px-1.5 py-0.5 font-semibold text-stone-400 underline-offset-2 hover:text-stone-700 hover:underline"
+              title={t('Espace administrateur')}
+            >
+              {t('Admin')}
+            </a>
+          </div>
         </div>
       </footer>
     </div>

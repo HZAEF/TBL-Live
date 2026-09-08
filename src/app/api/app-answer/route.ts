@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { bumpRevisions } from '@/lib/revision'
 import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
 
 // POST /api/app-answer — réponse d'équipe à une question d'application.
@@ -51,6 +52,22 @@ export async function POST(req: NextRequest) {
     const choices = JSON.parse(question.choices) as string[]
     if (choice < 0 || choice >= choices.length) {
       return NextResponse.json({ error: 'Choix invalide.' }, { status: 400 })
+    }
+
+    // v2.7.0 : un cas clinique non lancé par l'enseignant est INACCESSIBLE
+    // — l'énoncé et les questions ne sont même pas envoyés aux étudiants,
+    // et toute réponse directe (requête fabriquée) est refusée ici.
+    if (question.caseId) {
+      const c = await db.case.findUnique({ where: { id: question.caseId } })
+      if (c && !c.opened) {
+        return NextResponse.json(
+          {
+            error:
+              'Ce cas clinique n’a pas encore été lancé par votre professeur — patientez, l’écran se mettra à jour tout seul.',
+          },
+          { status: 409 }
+        )
+      }
     }
 
     // Révélation par question : une question dont toutes les équipes actives
@@ -110,6 +127,10 @@ export async function POST(req: NextRequest) {
       appAnswers: [...appAnswers, { teamId: student.teamId!, questionId }],
       forcedReveal: student.session.revealed,
     })
+
+    // v2.9.0 : réponse d'application enregistrée (et révélation
+    // possible) → compteurs + 1.
+    await bumpRevisions(student.sessionId)
 
     return NextResponse.json({ ok: true, revealedNow: revealedNow.length > 0 })
   } catch (e) {

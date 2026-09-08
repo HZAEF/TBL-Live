@@ -41,6 +41,8 @@ export interface CaseDTO {
   title: string
   intro: string | null
   order: number
+  /** v2.7.0 : cas lancé par l'enseignant (tableau de bord uniquement). */
+  opened?: boolean
 }
 
 export interface PublicSessionDTO {
@@ -52,6 +54,10 @@ export interface PublicSessionDTO {
 }
 
 export interface DashboardDTO {
+  /** v2.9.0 — compteur enseignant du sondage allégé + heure serveur
+   *  (minuteur iRAT identique à celui des étudiants). */
+  revision?: number
+  serverNow?: string
   session: {
     id: string
     code: string
@@ -60,6 +66,12 @@ export interface DashboardDTO {
     iratMinutes: number
     phaseStartedAt: string
     revealed: boolean
+    /** v2.7.0 : feedback lancé aux étudiants (false = écran d'attente,
+     *  aucune donnée envoyée). */
+    feedbackReady: boolean
+    /** v2.7.0 : date de la dernière synchronisation réussie avec la
+     *  version en ligne (null = jamais synchronisée). */
+    syncedAt: string | null
     createdAt: string
     /** Corbeille : date de mise à la corbeille (null = séance active).
      * Restaurable pendant 48 h, suppression définitive au-delà. */
@@ -77,6 +89,9 @@ export interface DashboardDTO {
     teamId: string | null
     /** Code de reprise personnel — l'enseignant peut le redonner à un étudiant qui l'a perdu */
     recoveryCode: string
+    /** v2.6.0 : date de soumission du questionnaire TBL-SAI (null = pas
+     *  encore répondu) — exports et statistiques du questionnaire. */
+    saiCompletedAt: string | null
   }[]
   iratAnswers: {
     questionId: string
@@ -106,6 +121,9 @@ export interface DashboardDTO {
   /** v2.6.0 : questionnaire de fin de séance (TBL-SAI) — items et
    *  résultats agrégés (renvoyés à l'enseignant uniquement). */
   saiItems: SaiItemDTO[]
+  /** v2.7.0 : réponses individuelles au questionnaire (matrice étudiant ×
+   *  item pour les exports CSV et la feuille Excel « Questionnaire »). */
+  saiResponses?: { studentId: string; itemId: string; value: number }[]
   saiStats?: {
     /** Nombre d'étudiants ayant soumis le questionnaire */
     completed: number
@@ -135,6 +153,12 @@ export interface SessionAlertDTO {
 }
 
 export interface StudentStateDTO {
+  /** v2.9.0 — numéro de révision (sondage allégé : la réponse
+   *  « unchanged » est filtrée avant d'arriver ici). */
+  revision?: number
+  /** v2.9.0 — heure du serveur au moment de la réponse (minuteurs
+   *  synchronisés enseignant ↔ étudiants, horloges personnelles corrigées). */
+  serverNow?: string
   session: {
     code: string
     title: string
@@ -142,6 +166,9 @@ export interface StudentStateDTO {
     phaseStartedAt: string
     iratMinutes: number
     revealed: boolean
+    /** v2.7.0 : false = écran d'attente (aucun résultat n'est envoyé
+     *  par le serveur tant que l'enseignant n'a pas lancé le feedback). */
+    feedbackReady?: boolean
   }
   me: {
     id: string
@@ -156,8 +183,13 @@ export interface StudentStateDTO {
   teamMembers: { id: string; name: string }[]
   questions: QuestionDTO[]
   applicationQuestions: QuestionDTO[]
-  /** Cas cliniques d'application (phase application et fin de séance) */
-  appCases?: CaseDTO[]
+  /** Cas cliniques d'application (phase application et fin de séance).
+   *  v2.7.0 : title/intro sont NULL pour un cas pas encore lancé (page
+   *  d'attente), et « opened » dit si le cas est accessible. */
+  appCases?: (Omit<CaseDTO, 'title'> & {
+    title: string | null
+    opened?: boolean
+  })[]
   /** Questions d'application dont les réponses sont révélées (auto ou forcée) */
   revealedAppQuestionIds?: string[]
   /** Phase application : progression des équipes par question (x/y ont répondu) */
