@@ -66,17 +66,22 @@ function watermarkUrl(text: string): string {
  *  ni d'erreur affichés à l'étudiant). La phase est envoyée avec le
  *  signalement (v2.5.1) pour que l'enseignant sache pendant QUELLE épreuve
  *  (iRAT, tRAT, application…) l'événement a eu lieu. Référence stable :
- *  ne change que si le jeton ou la phase change. */
+ *  ne change que si le jeton ou la phase change.
+ *  v3.0.0 : les signalements sont DÉSACTIVÉS par défaut — l'adminis-
+ *  trateur les réactive TBL par TBL. Quand enabled est false, la
+ *  fonction ne fait STRICTEMENT rien : aucune requête ne part, le
+ *  filigrane et le flou (protections locales) restent actifs. */
 function useReport(
   token: string | undefined,
-  phase: string | undefined
+  phase: string | undefined,
+  enabled: boolean
 ): (kind: AlertKind) => void {
   // Anti-rafales : au plus un envoi par type toutes les 5 s côté client
   // (le serveur re-déduplique à la minute).
   const lastSent = useRef<Record<string, number>>({})
   return useCallback(
     (kind: AlertKind) => {
-      if (!token) return
+      if (!token || !enabled) return
       const now = Date.now()
       if (now - (lastSent.current[kind] ?? 0) < 5_000) return
       lastSent.current[kind] = now
@@ -86,7 +91,7 @@ function useReport(
         body: JSON.stringify({ kind, phase: phase ?? null }),
       }).catch(() => {})
     },
-    [token, phase]
+    [token, phase, enabled]
   )
 }
 
@@ -96,6 +101,7 @@ export function AntiCapture({
   reportToken,
   watchTab,
   phase,
+  reportsEnabled,
   children,
 }: {
   /** Ce qui identifie l'écran dans le filigrane (nom · code). */
@@ -112,6 +118,10 @@ export function AntiCapture({
    *  signalement — permet à l'enseignant de savoir pendant quelle épreuve
    *  (iRAT, tRAT, application…) l'événement a eu lieu. */
   phase?: string
+  /** v3.0.0 : signalements activés pour cette séance (l'administrateur
+   *  les réactive TBL par TBL — désactivés par défaut). Le filigrane et
+   *  le flou restent TOUJOURS actifs : seuls les envois sont coupés. */
+  reportsEnabled?: boolean
   children: ReactNode
 }) {
   // Initialisation paresseuse : ce composant n'est monté QU'EN CLIENT
@@ -134,7 +144,7 @@ export function AntiCapture({
   // Pendant les tests (watchTab), chaque passage en arrière-plan
   // est de plus signalé à l'enseignant — signal FIABLE sur tous les
   // appareils (téléphones inclus), contrairement aux captures.
-  const report = useReport(reportToken, phase)
+  const report = useReport(reportToken, phase, reportsEnabled !== false)
   useEffect(() => {
     const onVis = () => {
       setHidden(document.hidden)

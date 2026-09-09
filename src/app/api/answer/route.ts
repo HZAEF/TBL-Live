@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withMetrics } from '@/lib/metrics'
 import { db } from '@/lib/db'
 import { bumpRevisions } from '@/lib/revision'
 
 // POST /api/answer — réponse individuelle (iRAT)
-export async function POST(req: NextRequest) {
+async function doPOST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     const token = body?.token
@@ -86,10 +87,16 @@ export async function POST(req: NextRequest) {
       throw e
     }
 
-    // v2.9.0 : la réponse change l'état vu par l'étudiant (sa propre
-    // réponse) et par l'enseignant (progression) → compteurs + 1 (le
-    // sondage allégé des autres étudiants renouvelle alors leur état).
-    await bumpRevisions(student.sessionId)
+    // v3.0.0 — Une réponse iRAT n'est visible NI par les autres
+    // étudiants, NI par les équipes : SEUL le tableau de bord ensei-
+    // gnant (progression) change → compteur enseignant SEUL. Avant,
+    // le compteur étudiant global était incrémenté : chaque réponse
+    // forçait les 149 autres étudiants à re-télécharger l'état
+    // complet (150 réponses = 22 000 rechargements — c'était LA
+    // tempête cachée des grandes classes). L'étudiant qui vient de
+    // répondre voit SA réponse arriver par le rafraîchissement forcé
+    // de son propre écran (pas par le compteur).
+    await bumpRevisions(student.sessionId, { student: false })
 
     // Pas de divulgation de la bonne réponse pendant l'iRAT
     return NextResponse.json({ ok: true })
@@ -98,3 +105,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })
   }
 }
+
+export const POST = withMetrics<unknown>(
+  'answer',
+  doPOST
+)

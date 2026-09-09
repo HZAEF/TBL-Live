@@ -514,17 +514,23 @@ export function TeacherDashboard({
               </span>
             )}
           </TabsTrigger>
-          {/* v2.5.1 : rubrique « Signalements » demandée par l'enseignant,
-              à part entière juste après « Réclamations » (alertes anti-capture
-              divisées par épreuve, voir teacher-tabs.tsx). */}
-          <TabsTrigger value="alerts" className="flex-1 px-3 py-2 sm:flex-none">
-            {t('Signalements')}
-            {(data.alerts?.length ?? 0) > 0 && (
-              <span className="ml-1.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                {data.alerts!.length}
-              </span>
-            )}
-          </TabsTrigger>
+          {/* v2.5.1 : rubrique « Signalements » (alertes anti-capture
+              divisées par épreuve, voir teacher-tabs.tsx).
+              v3.0.0 : DÉSACTIVÉE par défaut — l'onglet n'apparaît que si
+              l'administrateur a activé les signalements pour CE TBL
+              (espace /admin → Gestion des séances). Quand ils sont
+              désactivés, la requête des événements n'est même plus
+              exécutée côté serveur : la séance reste légère. */}
+          {data.session.reportsEnabled === true && (
+            <TabsTrigger value="alerts" className="flex-1 px-3 py-2 sm:flex-none">
+              {t('Signalements')}
+              {(data.alerts?.length ?? 0) > 0 && (
+                <span className="ml-1.5 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                  {data.alerts!.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
           {/* v2.7.0 : rubrique « Configurations » — paramètres de la séance
               (titre, PIN, durée), sauvegarde/téléversement, exclusion d'un
               étudiant et synchronisation Internet ↔ réseau local. */}
@@ -559,9 +565,11 @@ export function TeacherDashboard({
         <TabsContent value="appeals" className="mt-4">
           <AppealsTab data={data} manage={manage} />
         </TabsContent>
-        <TabsContent value="alerts" className="mt-4">
-          <SignalementsTab data={data} />
-        </TabsContent>
+        {data.session.reportsEnabled === true && (
+          <TabsContent value="alerts" className="mt-4">
+            <SignalementsTab data={data} />
+          </TabsContent>
+        )}
         {/* v2.7.0 : Configurations — tout ce qui n'est ni questions, ni
             questionnaire, ni équipes : paramètres, sauvegarde, transfert,
             exclusion d'étudiant, synchronisation. */}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withMetrics } from '@/lib/metrics'
 import { db } from '@/lib/db'
 import { getSessionByCode, randomToken, randomRecoveryCode, normalizeName } from '@/lib/tbl'
 import { bumpRevisions } from '@/lib/revision'
@@ -16,7 +17,7 @@ import { bumpRevisions } from '@/lib/revision'
 //    invité à se différencier (nom de famille) au lieu de voler le compte.
 // Les comptes créés avant la v2.6.0 gardent leur code généré (6 caractères)
 // — parfaitement compatible avec la reprise par nom + code.
-export async function POST(req: NextRequest) {
+async function doPOST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     const code = typeof body?.code === 'string' ? body.code : ''
@@ -185,3 +186,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })
   }
 }
+
+export const POST = withMetrics<unknown>(
+  'join',
+  doPOST
+)

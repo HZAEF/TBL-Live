@@ -49,7 +49,11 @@ export async function POST(req: NextRequest) {
 
     const student = await db.student.findUnique({
       where: { token },
-      select: { id: true, sessionId: true, session: { select: { deletedAt: true } } },
+      select: {
+        id: true,
+        sessionId: true,
+        session: { select: { deletedAt: true, reportsEnabled: true } },
+      },
     })
     if (!student) {
       return NextResponse.json({ error: 'Connexion perdue.' }, { status: 404 })
@@ -58,6 +62,16 @@ export async function POST(req: NextRequest) {
     // façon bloqué, mais évitons d'écrire dans une séance archivée).
     if (student.session.deletedAt) {
       return NextResponse.json({ error: 'Séance supprimée.' }, { status: 410 })
+    }
+
+    // v3.0.0 — Signalements DÉSACTIVÉS pour cette séance (choix de
+    // l'administrateur, TBL par TBL — désactivés par défaut) : on ne
+    // répond « ok » SANS RIEN ÉCRIRE (l'app étudiante, informée par
+    // son état, ne devrait de toute façon plus envoyer de signale-
+    // ment : ce contrôle protège les versions antérieures ouvertes
+    // et garantit zéro écriture, zéro requête inutile).
+    if (student.session.reportsEnabled !== true) {
+      return NextResponse.json({ ok: true, disabled: true })
     }
 
     // Déduplication : dernier signalement du même type il y a moins d'une minute ?

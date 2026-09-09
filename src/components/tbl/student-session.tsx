@@ -33,21 +33,52 @@ export function StudentSession({
   onLeave: () => void
   onExit: () => void
 }) {
-  // v2.9.0 — Sondage allégé : le fetcher garde le dernier état complet
-  // en référence. À chaque cycle il envoie ?rev=N ; si le serveur
-  // répond « unchanged », l'ANCIEN objet est renvoyé tel quel — même
-  // référence React → aucun re-rendu, aucune requête lourde en base.
-  // Au moindre changement, l'état complet neuf arrive et remplace tout.
+  // v3.0.0 — SONDAGE EN DEUX TEMPS (la fluidité à 150 étudiants) :
+  //  1. chaque cycle interroge /api/student/revision : UNE requête
+  //     en base, une réponse de quelques octets (numéros de révision
+  //     + heure serveur). Tant que les numéros sont identiques, l'ANCIEN
+  //     objet est renvoyé tel quel — même référence React → aucun
+  //     re-rendu, aucune lecture lourde ;
+  //  2. dès qu'un numéro change (phase tournée, réponse de SON équipe,
+  //     révélation…), l'état complet est demandé — avec un petit délai
+  //     aléatoire (0-600 ms) qui étale la classe : 150 étudiants ne
+  //     partent pas tous dans la même milliseconde.
+  //  3. refresh(force=true) après une SOUMISSION : l'état complet est
+  //     repris SANS condition — la propre réponse de l'étudiant est
+  //     visible immédiatement, sans incrémenter les compteurs des
+  //     autres (une réponse iRAT n'intéresse que son auteur et le
+  //     tableau de bord).
   const lastStateRef = useRef<StudentStateDTO | null>(null)
-  const fetchState = useCallback(async () => {
-    const rev = lastStateRef.current?.revision
-    const url = rev === undefined ? '/api/student' : `/api/student?rev=${rev}`
+  const fetchState = useCallback(async (force = false) => {
+    const last = lastStateRef.current
+    if (!force && last) {
+      const light = await api<{
+        revision: number
+        teamRevision: number | null
+        serverNow?: string
+      }>('/api/student/revision', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      // L'heure serveur corrige l'horloge de l'appareil — tous les
+      // minuteurs (iRAT, durée de phase) restent synchronisés.
+      noteServerNow(light.serverNow)
+      if (
+        light.revision === last.revision &&
+        light.teamRevision === (last.teamRevision ?? null)
+      ) {
+        return last
+      }
+      // Quelque chose a changé : léger étalement de la classe.
+      await new Promise((r) => setTimeout(r, Math.random() * 600))
+    }
+    const url =
+      !force && last
+        ? `/api/student?rev=${last.revision}&trev=${last.teamRevision ?? 'null'}`
+        : '/api/student'
     const d = await api<StudentStateDTO | { unchanged: true; revision: number; serverNow?: string }>(
       url,
       { headers: { Authorization: `Bearer ${token}` } }
     )
-    // v2.9.0 : l'heure serveur corrige l'horloge de l'appareil — tous
-    // les minuteurs (iRAT, durée de phase) sont synchronisés.
     noteServerNow(d.serverNow)
     if ((d as { unchanged?: boolean }).unchanged === true) {
       return lastStateRef.current as StudentStateDTO
@@ -57,12 +88,12 @@ export function StudentSession({
   }, [token])
   const { data, error, loading, refresh } = usePoll<StudentStateDTO>(
     fetchState,
-    // Sondage adaptatif : 2,5 s pendant les phases où les étudiants
-    // répondent (iRAT, tRAT, application), 5 s pendant les phases d'attente
-    // (accueil, réclamations, feedback, pairs, fin) — v2.9.0 : avec le
-    // sondage allégé, ces requêtes coûtent presque rien quand rien ne
-    // change : la réactivité reste maximale même avec 65 étudiants.
-    (d) => (d && ['irat', 'trat', 'application'].includes(d.session.status) ? 2500 : 5000)
+    // Sondage adaptatif : 2 s pendant les phases où les étudiants
+    // répondent (iRAT, tRAT, application — chaque cycle ne coûte plus
+    // qu'une ligne de base), 5 s pendant les phases d'attente (accueil,
+    // réclamations, feedback, pairs, fin). Page cachée = pause totale
+    // (v3.0.0) : 150 téléphones éteints ne consomment plus rien.
+    (d) => (d && ['irat', 'trat', 'application'].includes(d.session.status) ? 2000 : 5000)
   )
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [showCode, setShowCode] = useState(false)
@@ -130,6 +161,10 @@ export function StudentSession({
       // v2.5.1 : épreuve en cours transmise avec chaque signalement, pour
       // l'affichage « par épreuve » dans l'onglet Signalements enseignant.
       phase={status}
+      // v3.0.0 : signalements activés pour cette séance ? (l'adminis-
+      // trateur les réactive TBL par TBL — désactivés par défaut :
+      // aucune requête ne part, le filigrane et le flou restent actifs).
+      reportsEnabled={data.session.reportsEnabled === true}
     >
       <div className="mx-auto max-w-2xl space-y-4">
         {/* En-tête */}

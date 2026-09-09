@@ -76,6 +76,10 @@ export interface DashboardDTO {
     /** Corbeille : date de mise à la corbeille (null = séance active).
      * Restaurable pendant 48 h, suppression définitive au-delà. */
     deletedAt: string | null
+    /** v3.0.0 : signalements anti-capture activés pour cette séance
+     *  (désactivés par défaut : l'onglet « Signalements » du tableau de
+     *  bord n'apparaît que si l'administrateur les a réactivés). */
+    reportsEnabled?: boolean
     /** Date de purge automatique des données étudiantes (rétention 4 mois,
      * null = données encore présentes). QCM et cas cliniques conservés. */
     dataPurgedAt: string | null
@@ -156,6 +160,9 @@ export interface StudentStateDTO {
   /** v2.9.0 — numéro de révision (sondage allégé : la réponse
    *  « unchanged » est filtrée avant d'arriver ici). */
   revision?: number
+  /** v3.0.0 — numéro de révision de l'ÉQUIPE de l'étudiant (tentatives
+   *  tRAT : seuls les membres de l'équipe renouvellent leur état). */
+  teamRevision?: number | null
   /** v2.9.0 — heure du serveur au moment de la réponse (minuteurs
    *  synchronisés enseignant ↔ étudiants, horloges personnelles corrigées). */
   serverNow?: string
@@ -169,6 +176,9 @@ export interface StudentStateDTO {
     /** v2.7.0 : false = écran d'attente (aucun résultat n'est envoyé
      *  par le serveur tant que l'enseignant n'a pas lancé le feedback). */
     feedbackReady?: boolean
+    /** v3.0.0 : signalements anti-capture activés pour cette séance
+     *  (désactivés par défaut — l'app étudiante ne les envoie plus). */
+    reportsEnabled?: boolean
   }
   me: {
     id: string

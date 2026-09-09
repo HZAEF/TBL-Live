@@ -1119,7 +1119,37 @@ async function runManageAction(
       // synchronisation serveur ↔ serveur. Jamais exposée au navigateur :
       // ce format est tiré/poussé par les serveurs eux-mêmes. La demande
       // doit venir d'une instance qui possède déjà le jeton enseignant.
+      //
+      // v3.0.0 — TIRAGE DELTA : le corps peut transporter rev/revT (les
+      // numéros que l'appelant connaît déjà). S'ils sont TOUJOURS les
+      // nôtres, la réponse se limite à { unchanged: true } : AUCUNE
+      // construction de sauvegarde (aucune requête sur les réponses,
+      // équipes, étudiants…), quelques octets au lieu du snapshot
+      // complet. Le cycle local ↔ en ligne au repos ne coûte plus rien
+      // des deux côtés ; le snapshot ne circule qu'au premier tirage et
+      // au premier changement réel.
       case 'export_sync': {
+        const knownRev =
+          typeof body.rev === 'number' && Number.isInteger(body.rev) && body.rev >= 0
+            ? body.rev
+            : null
+        const knownRevT =
+          typeof body.revT === 'number' && Number.isInteger(body.revT) && body.revT >= 0
+            ? body.revT
+            : null
+        if (
+          knownRev !== null &&
+          knownRevT !== null &&
+          knownRev === session.revision &&
+          knownRevT === session.revisionTeacher
+        ) {
+          return NextResponse.json({
+            unchanged: true,
+            revision: session.revision,
+            revisionTeacher: session.revisionTeacher,
+            exportedAt: new Date().toISOString(),
+          })
+        }
         return NextResponse.json(await buildSyncBackup(session))
       }
 

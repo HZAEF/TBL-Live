@@ -26,6 +26,11 @@ import {
 } from '@/lib/tbl-client'
 import { exampleContent, emptyQuestion, emptyCase, QuestionEditor } from './question-editor'
 import { TeacherDashboard } from './teacher-dashboard'
+import {
+  TeacherAccountBar,
+  TeacherLoginGate,
+  useTeacherAuth,
+} from './teacher-account'
 import { suggestPin, type DraftCase, type DraftQuestion } from '@/lib/tbl-types'
 import { DEFAULT_SAI_ITEMS, SAI_SUBSCALES, SAI_SUBSCALE_INFO, type SaiSubscale } from '@/lib/sai'
 import { t, useI18n } from '@/lib/i18n'
@@ -39,6 +44,10 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
   const [loginCode, setLoginCode] = useState('')
   const { toast } = useToast()
   const { t } = useI18n()
+  // v3.0.0 — connexion OBLIGATOIRE du compte enseignant : sans compte,
+  // impossible de créer, reprendre ou téléverser une séance (les
+  // comptes sont créés par l'administrateur dans /admin → Comptes).
+  const { checking, teacher, setTeacher } = useTeacherAuth()
 
   const openDashboard = (code: string, token: string, title?: string) => {
     saveTeacherSession({ code, token, title: title || 'Séance', savedAt: Date.now() })
@@ -66,8 +75,24 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
     )
   }
 
+  // Porte de connexion : tant que le compte enseignant n'est pas
+  // connecté, l'espace enseignant se limite à l'écran de connexion.
+  if (checking) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-200 border-t-emerald-600" />
+      </div>
+    )
+  }
+  if (!teacher) {
+    return <TeacherLoginGate onLoggedIn={setTeacher} />
+  }
+
   return (
     <div className="mx-auto max-w-2xl space-y-4">
+      {/* v3.0.0 — barre du compte : prénom/nom, changement de mot de
+          passe, déconnexion. */}
+      <TeacherAccountBar teacher={teacher} onLoggedOut={() => setTeacher(null)} />
       {view === 'menu' && (
         <TeacherMenu
           onExit={onExit}

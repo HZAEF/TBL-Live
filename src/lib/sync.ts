@@ -65,6 +65,10 @@ export interface BackupSessionCore {
    *  antérieures → traités comme 0). */
   revision?: number
   revisionTeacher?: number
+  /** v3.0.0 : signalements anti-capture activés pour cette séance
+   *  (absent des sauvegardes antérieures → non modifié à l'import,
+   *  la valeur par défaut « désactivé » s'applique aux séances neuves). */
+  reportsEnabled?: boolean
 }
 
 export interface SyncBackup {
@@ -190,6 +194,10 @@ export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
       // étudiants de l'autre version détectent chaque changement).
       revision: session.revision,
       revisionTeacher: session.revisionTeacher,
+      // v3.0.0 : signalements anti-capture activés pour cette séance
+      // (l'administrateur peut les réactiver TBL par TBL — le réglage
+      // suit la séance sur les deux versions).
+      reportsEnabled: session.reportsEnabled,
     },
     secrets: {
       sessionId: session.id,
@@ -318,10 +326,14 @@ export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
  *
  * @param pin nouveau PIN (format v1, séance recréée sur un appareil
  *            neuf — déjà haché par l'appelant) ; absent en v2.
+ * @param teacherId v3.0.0 : compte enseignant propriétaire (télé-
+ *            versement depuis le navigateur) ; null pour la synchro
+ *            machine ↔ machine (le miroir n'appartient à personne).
  */
 export async function replaceSessionFromBackup(
   backupRaw: unknown,
-  hashedPin?: string
+  hashedPin?: string,
+  teacherId?: string | null
 ): Promise<{ session: Session; restored: boolean }> {
   const b = backupRaw as Partial<SyncBackup>
   if (!b || typeof b !== 'object') throw new BackupError('Fichier invalide.')
@@ -577,6 +589,12 @@ export async function replaceSessionFromBackup(
         // pour les clients de CETTE version (renouvellement immédiat).
         revision: incomingRevision + 1,
         revisionTeacher: incomingRevisionTeacher + 1,
+        // v3.0.0 : compte propriétaire (téléversement navigateur) et
+        // signalements (transportés par la synchronisation, l'adminis-
+        // trateur peut les activer TBL par TBL sur l'une ou l'autre
+        // version). Absent du fichier → désactivés (défaut v3.0).
+        teacherId: teacherId ?? null,
+        reportsEnabled: b.session?.reportsEnabled === true,
       },
     })
     if (teams.length > 0)
@@ -1103,6 +1121,18 @@ export async function mergePullIntoLocal(session: Session, backupRaw: unknown): 
   // Titre / durée : dernier écrit gagne (enseignant, des deux côtés).
   const remoteUpdated = dateOrNull(b.exportedAt)
   const localSessionEff = eff(session.updatedAt, session.createdAt)
+  // v3.0.0 — Signalements par TBL : dernier écrit gagne (comme le titre
+  // et la durée). Uniquement si le fichier DISTANT transporte explicitement
+  // le réglage (les versions antérieures à la v3.0 ne le transportent pas :
+  // leur fusion ne doit jamais désactiver ce qu'on a activé ici).
+  if (
+    typeof s?.reportsEnabled === 'boolean' &&
+    s.reportsEnabled !== session.reportsEnabled &&
+    remoteUpdated &&
+    remoteUpdated.getTime() > localSessionEff
+  ) {
+    data.reportsEnabled = s.reportsEnabled
+  }
   if (remoteUpdated && remoteUpdated.getTime() > localSessionEff) {
     if (typeof s?.title === 'string' && s.title.length >= 1 && s.title.length <= 120 && s.title !== session.title)
       data.title = s.title
@@ -1167,6 +1197,10 @@ export interface SyncResult {
    *  précédent push — le miroir a été laissé tel quel (aucun envoi
    *  inutile, la charge de la version en ligne reste minuscule). */
   skipped?: boolean
+  /** v3.0.0 : true si la version en ligne n'avait RIEN changé depuis
+   *  le précédent tirage — la réponse « rien n'a changé » minuscule a
+   *  remplacé le snapshot complet (tirage delta). */
+  pullSkipped?: boolean
   at: string
 }
 
@@ -1188,6 +1222,15 @@ const FETCH_TIMEOUT_MS = 60_000
 // une synchronisation très fréquente.
 const lastPushState = new Map<string, { rev: number; revT: number }>()
 
+// v3.0.0 — Mémoire du dernier TIRAGE réussi (par code de séance) : le
+// cycle envoie au serveur distant les numéros qu'il connaît déjà ; si
+// rien n'a changé de l'autre côté, la réponse est une ligne minuscule
+// « rien n'a changé » (aucune construction de sauvegarde, aucun merge,
+// quelques octets au lieu du snapshot complet). C'est le mode hybride
+// DELTA : le snapshot complet ne circule que lorsqu'une donnée a
+// réellement changé (réponse, phase, équipe…).
+const lastPullState = new Map<string, { rev: number; revT: number }>()
+
 /**
  * Synchronisation complète d'une séance avec la version en ligne :
  *  1. TIRER l'état distant (échec propre si la séance n'existe pas
@@ -1203,21 +1246,55 @@ export async function syncNow(session: Session, remoteUrl: string): Promise<Sync
   if (!base) throw new SyncError('Adresse de la version en ligne invalide.')
   const url = (p: string) => `${base}${p}`
 
-  // 1. Tirer
+  // 1. Tirer — v3.0.0 TIRAGE DELTA : on transmet les numéros de révision
+  // déjà connus ; si la version en ligne porte ENCORE ces numéros, elle
+  // répond « rien n'a changé » (quelques octets, aucune construction de
+  // sauvegarde) : le merge est intégralement sauté. Au moindre changement
+  // distant (réponse d'un étudiant en ligne, phase tournée là-bas…), le
+  // snapshot complet arrive et la fusion s'exécute comme avant.
   let pulled: MergeSummary | null = null
+  let pullSkipped = false
+  const lastPull = lastPullState.get(session.code)
   try {
     const res = await fetch(url(`/api/sessions/${session.code}/manage`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: session.teacherToken, action: 'export_sync' }),
+      body: JSON.stringify({
+        token: session.teacherToken,
+        action: 'export_sync',
+        ...(lastPull ? { rev: lastPull.rev, revT: lastPull.revT } : {}),
+      }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
     if (res.status === 404) {
       // La séance n'existe pas encore en ligne : elle sera créée par le push.
       pulled = null
     } else if (res.ok) {
-      const backup = (await res.json()) as SyncBackup
-      pulled = await mergePullIntoLocal(session, backup)
+      const data = (await res.json()) as
+        | { unchanged?: boolean; revision?: number; revisionTeacher?: number }
+        | SyncBackup
+      if (
+        data &&
+        (data as { unchanged?: boolean }).unchanged === true &&
+        typeof (data as { revision?: number }).revision === 'number'
+      ) {
+        // Rien n'a changé en ligne : numéros confirmés, aucun merge.
+        pullSkipped = true
+        lastPullState.set(session.code, {
+          rev: (data as { revision: number }).revision,
+          revT: (data as { revisionTeacher: number }).revisionTeacher,
+        })
+      } else {
+        const backup = data as SyncBackup
+        pulled = await mergePullIntoLocal(session, backup)
+        const after = await db.session.findUnique({
+          where: { id: session.id },
+          select: { revision: true, revisionTeacher: true },
+        })
+        if (after) {
+          lastPullState.set(session.code, { rev: after.revision, revT: after.revisionTeacher })
+        }
+      }
     } else if (res.status === 401) {
       throw new SyncError(
         'La séance en ligne existe mais ne correspond pas à cette séance (jetons différents). Utilisez plutôt « Téléverser la séance » pour la recréer.'
@@ -1252,7 +1329,14 @@ export async function syncNow(session: Session, remoteUrl: string): Promise<Sync
   // Rien n'a bougé nulle part depuis le précédent push : on s'abstient
   // (le tirage suffit, le miroir distant est déjà exact).
   if (!localChanged && !pulledSomething && last) {
-    return { ok: true, pulled, pushed: true, skipped: true, at: new Date().toISOString() }
+    return {
+      ok: true,
+      pulled,
+      pushed: true,
+      skipped: true,
+      pullSkipped,
+      at: new Date().toISOString(),
+    }
   }
   const backup = await buildSyncBackup(session)
   try {
@@ -1265,6 +1349,19 @@ export async function syncNow(session: Session, remoteUrl: string): Promise<Sync
     if (!res.ok) {
       const body = (await res.json().catch(() => null)) as { error?: string } | null
       throw new SyncError(body?.error ?? `La synchronisation a été refusée par la version en ligne (${res.status}).`)
+    }
+    // v3.0.0 — le miroir renvoie ses nouveaux compteurs : on les
+    // mémorise comme « déjà tirés » → le prochain cycle ne re-tirera
+    // PAS le snapshot qu'on vient de pousser (tirage delta).
+    const imported = (await res.json().catch(() => null)) as {
+      revision?: number
+      revisionTeacher?: number
+    } | null
+    if (imported && typeof imported.revision === 'number') {
+      lastPullState.set(session.code, {
+        rev: imported.revision,
+        revT: typeof imported.revisionTeacher === 'number' ? imported.revisionTeacher : 0,
+      })
     }
   } catch (e) {
     if (e instanceof SyncError) throw e

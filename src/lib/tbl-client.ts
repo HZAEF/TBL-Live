@@ -49,8 +49,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export type PollInterval<T> = number | ((data: T | null) => number)
 
 const POLL_JITTER_MS = 500
+const BACKOFF_MAX_MS = 30_000
 
-export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2500) {
+export function usePoll<T>(fn: (force?: boolean) => Promise<T>, intervalMs: PollInterval<T> = 2500) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
   const [loading, setLoading] = useState(true)
@@ -60,32 +61,66 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2
   intervalRef.current = intervalMs
   const dataRef = useRef<T | null>(null)
   dataRef.current = data
+  // v3.0.0 — page cachée : sondage en pause (téléphone dans la poche).
+  const pausedRef = useRef(false)
+  // v3.0.0 — un rafraîchissement complet a été demandé entre deux cycles.
+  const forceRef = useRef(false)
 
   useEffect(() => {
     let alive = true
     let timer: ReturnType<typeof setTimeout> | undefined
+    let failures = 0
     const run = async () => {
+      if (pausedRef.current) return // page cachée : on attend le retour
       try {
-        const d = await fnRef.current()
+        const d = await fnRef.current(forceRef.current)
+        forceRef.current = false
         if (alive) {
           setData(d)
           dataRef.current = d
           setError(null)
+          failures = 0
         }
       } catch (e) {
         if (alive) setError(e as ApiError)
+        failures += 1
       } finally {
         if (alive) {
           setLoading(false)
           const iv = intervalRef.current
-          const delay = typeof iv === 'function' ? iv(dataRef.current) : iv
+          const base = typeof iv === 'function' ? iv(dataRef.current) : iv
+          // v3.0.0 — backoff réseau : chaque échec consécutif double le
+          // délai (plafond 30 s) ; une coupure réseau ne transforme pas
+          // l'application en machine à requêtes. Le moindre succès
+          // ramène le rythme normal.
+          const delay =
+            failures > 0 ? Math.min(base * Math.pow(2, failures), BACKOFF_MAX_MS) : base
           timer = setTimeout(run, delay + Math.random() * POLL_JITTER_MS)
         }
       }
     }
     run()
+
+    // v3.0.0 — Page cachée → pause TOTALE du sondage ; visible →
+    // reprise immédiate avec rafraîchissement complet. Un téléphone
+    // écran éteint ou un onglet en arrière-plan ne consomme plus rien
+    // du serveur ; dès le retour, l'état est rechargé à l'instant.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        pausedRef.current = true
+        if (timer) clearTimeout(timer)
+      } else if (alive && pausedRef.current) {
+        pausedRef.current = false
+        if (timer) clearTimeout(timer)
+        forceRef.current = true
+        run()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       alive = false
+      document.removeEventListener('visibilitychange', onVisibility)
       if (timer) clearTimeout(timer)
     }
     // Montage unique : fn, interval et data sont suivis par refs — le
@@ -93,10 +128,14 @@ export function usePoll<T>(fn: () => Promise<T>, intervalMs: PollInterval<T> = 2
     // [intervalMs] avec un nombre qui ne changeait jamais).
   }, [])
 
-  const refresh = useCallback(async () => {
+  // v3.0.0 — refresh(force) : force l'état complet NEUF (utilisé après
+  // qu'un étudiant a soumis une réponse : sa propre vue change SANS
+  // toucher les compteurs des autres étudiants — pas de tempête).
+  const refresh = useCallback(async (force = true) => {
     try {
-      const d = await fnRef.current()
+      const d = await fnRef.current(force)
       setData(d)
+      dataRef.current = d
       setError(null)
       return d
     } catch (e) {

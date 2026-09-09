@@ -16,6 +16,18 @@
 //    modifiable et réinitialisable à tout moment) ;
 //  - de changer le mot de passe administrateur.
 //
+// v3.0.0 — TROIS espaces nouveaux :
+//  - COMPTES : comptes enseignants (connexion obligatoire pour ouvrir
+//    une séance) : saisie manuelle, import Excel/CSV, mots de passe
+//    oubliés, domaine institutionnel des emails ;
+//  - APPARENCE : couleurs de l'application (principale, accent, fond)
+//    et icônes de l'accueil ;
+//  - PERFORMANCES : étudiants actifs, requêtes/minute, latence des
+//    routes (en direct pendant un cours).
+//  - Séances : sélection MULTIPLE avec corbeille/suppression en bloc
+//    (boutons en haut, près d'« Actualiser ») + signalements
+//    anti-capture activables TBL par TBL (désactivés par défaut).
+//
 // Page volontairement en FRANÇAIS SEUL (aucune clé i18n) : seul
 // l'espace enseignant/étudiant est multilingue.
 // ============================================================
@@ -28,12 +40,17 @@ import {
   KeyRound,
   Loader2,
   LogOut,
+  Mail,
+  Palette,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
   ShieldAlert,
   Trash2,
+  Upload,
+  UserRound,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,6 +59,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api } from '@/lib/tbl-client'
 import { reloadAppConfig } from '@/lib/app-config'
+import { THEME_ICON_CHOICES, THEME_PRESETS, type ThemeConfig, type ThemeIconKind } from '@/lib/theme'
+import { themeIcon } from '@/lib/theme-client'
+import { buildXlsx, downloadBlob } from '@/lib/xlsx-writer'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 
@@ -52,6 +72,10 @@ interface AdminState {
   needsSetup: boolean
   syncIntervalMs: number
   textsCount: number
+  /** v3.0.0 — domaine des emails institutionnels enseignants. */
+  teacherEmailDomain?: string
+  /** v3.0.0 — thème actuel (couleurs + icônes). */
+  theme?: ThemeConfig
 }
 
 interface AdminSessionRow {
@@ -68,6 +92,23 @@ interface AdminSessionRow {
   questions: number
   cases: number
   answers: number
+  /** v3.0.0 : signalements anti-capture activés pour cette séance. */
+  reportsEnabled?: boolean
+  /** v3.0.0 : compte enseignant propriétaire (null = importée/ancienne). */
+  teacher?: { firstName: string; lastName: string; email: string } | null
+}
+
+/** v3.0.0 — ligne de compte enseignant (espace Comptes). */
+interface AdminAccountRow {
+  id: string
+  firstName: string
+  lastName: string
+  email: string
+  sessions: number
+  lockedUntil: string | null
+  forgotPending: boolean
+  forgotPasswordAt: string | null
+  createdAt: string
 }
 
 const SYNC_CHOICES = [
@@ -358,6 +399,16 @@ function AdminMain({
           <TabsTrigger value="sessions" className="flex-1 px-3 py-2 sm:flex-none">
             Séances TBL
           </TabsTrigger>
+          {/* v3.0.0 — comptes enseignants (connexion obligatoire). */}
+          <TabsTrigger value="accounts" className="flex-1 px-3 py-2 sm:flex-none">
+            <UserRound className="mr-1 h-3.5 w-3.5" />
+            Comptes
+          </TabsTrigger>
+          {/* v3.0.0 — couleurs et icônes de l'application. */}
+          <TabsTrigger value="appearance" className="flex-1 px-3 py-2 sm:flex-none">
+            <Palette className="mr-1 h-3.5 w-3.5" />
+            Apparence
+          </TabsTrigger>
           <TabsTrigger value="params" className="flex-1 px-3 py-2 sm:flex-none">
             Paramètres
           </TabsTrigger>
@@ -376,6 +427,12 @@ function AdminMain({
 
         <TabsContent value="sessions" className="mt-4">
           <SessionsTab call={call} />
+        </TabsContent>
+        <TabsContent value="accounts" className="mt-4">
+          <AccountsTab call={call} />
+        </TabsContent>
+        <TabsContent value="appearance" className="mt-4">
+          <AppearanceTab theme={state.theme ?? {}} call={call} />
         </TabsContent>
         <TabsContent value="params" className="mt-4">
           <ParamsTab state={state} call={call} />
@@ -446,32 +503,66 @@ function SessionsTab({ call }: { call: CallFn }) {
           {rows.length} séance(s) dans la base · {activeCount} active(s) ·{' '}
           {rows.length - activeCount} en corbeille.
         </p>
-        <div className="flex items-center gap-2">
+        {/* v3.0.0 — sélection multiple : les DEUX options (corbeille et
+            suppression définitive) sont en haut, À CÔTÉ d'« Actualiser »,
+            comme demandé par l'administratrice. Cochez les cases des
+            séances concernées, puis un seul clic agit sur toutes. */}
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" className="h-9 border-stone-300" onClick={load}>
             <RefreshCw className="mr-1 h-3.5 w-3.5" /> Actualiser
           </Button>
-          {selected.size > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 border-red-300 text-red-700 hover:bg-red-50"
-              onClick={() => {
-                const n = selected.size
-                if (
-                  window.confirm(
-                    `Supprimer DÉFINITIVEMENT les ${n} séance(s) sélectionnées ? Toutes leurs données (étudiants, réponses, notes, réclamations, évaluations) seront effacées, sans possibilité de retour.`
-                  )
-                ) {
-                  call(
-                    { action: 'bulk_delete_forever', codes: [...selected] },
-                    `${n} séance(s) supprimée(s) définitivement.`
-                  ).then(() => load())
-                }
-              }}
-            >
-              <Trash2 className="mr-1 h-3.5 w-3.5" /> Supprimer la sélection ({selected.size})
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 border-amber-300 text-amber-800 hover:bg-amber-50"
+            disabled={selected.size === 0}
+            title={
+              selected.size === 0
+                ? 'Cochez les cases des séances à mettre à la corbeille'
+                : `Mettre les ${selected.size} séance(s) sélectionnée(s) à la corbeille`
+            }
+            onClick={() => {
+              const n = selected.size
+              if (
+                window.confirm(
+                  `Mettre ${n} séance(s) à la corbeille ? Les étudiants perdent immédiatement l'accès (restauration possible pendant 48 h, sélections possible ensuite).`
+                )
+              ) {
+                call(
+                  { action: 'bulk_trash', codes: [...selected] },
+                  `${n} séance(s) mise(s) à la corbeille.`
+                ).then(() => load())
+              }
+            }}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" /> Corbeille{selected.size > 0 ? ` (${selected.size})` : ''}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 border-red-300 text-red-700 hover:bg-red-50"
+            disabled={selected.size === 0}
+            title={
+              selected.size === 0
+                ? 'Cochez les cases des séances à supprimer définitivement'
+                : `Supprimer DÉFINITIVEMENT les ${selected.size} séance(s) sélectionnée(s)`
+            }
+            onClick={() => {
+              const n = selected.size
+              if (
+                window.confirm(
+                  `Supprimer DÉFINITIVEMENT les ${n} séance(s) sélectionnées ? Toutes leurs données (étudiants, réponses, notes, réclamations, évaluations) seront effacées, sans possibilité de retour.`
+                )
+              ) {
+                call(
+                  { action: 'bulk_delete_forever', codes: [...selected] },
+                  `${n} séance(s) supprimée(s) définitivement.`
+                ).then(() => load())
+              }
+            }}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" /> Supprimer définitivement{selected.size > 0 ? ` (${selected.size})` : ''}
+          </Button>
         </div>
       </div>
 
@@ -587,7 +678,58 @@ function SessionCard({
             <span>{row.answers} réponse(s)</span>
             {row.dataPurgedAt && <span className="text-amber-700">données étudiantes purgées</span>}
             <span>créée le {fmtDate(row.createdAt)}</span>
+            {row.teacher && (
+              <span className="text-emerald-700">
+                propriétaire : {row.teacher.firstName} {row.teacher.lastName}
+              </span>
+            )}
           </p>
+
+          {/* v3.0.0 — Signalements anti-capture de CE TBL : désactivés par
+              défaut (l'onglet « Signalements » n'apparaît pas dans le
+              tableau de bord, aucune écriture en base, aucune requête
+              au sondage). L'administratrice les réactive ici TBL par TBL
+              si une séance particulière le justifie. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                await call(
+                  { action: 'set_reports', code: row.code, enabled: !row.reportsEnabled },
+                  row.reportsEnabled
+                    ? `Signalements désactivés pour ${row.code}.`
+                    : `Signalements activés pour ${row.code}.`
+                )
+                setBusy(false)
+                onChanged()
+              }}
+              className={cn(
+                'inline-flex h-8 items-center gap-2 rounded-full border px-3 text-xs font-semibold transition-colors',
+                row.reportsEnabled
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                  : 'border-stone-300 bg-stone-50 text-stone-600 hover:bg-stone-100'
+              )}
+              title="Les signalements anti-capture (captures suspectées, sorties d'application) sont envoyés au tableau de bord enseignant — désactivés par défaut pour alléger la séance."
+            >
+              <span
+                className={cn(
+                  'relative inline-block h-4 w-7 rounded-full transition-colors',
+                  row.reportsEnabled ? 'bg-emerald-500' : 'bg-stone-300'
+                )}
+                aria-hidden="true"
+              >
+                <span
+                  className={cn(
+                    'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all',
+                    row.reportsEnabled ? 'left-3.5' : 'left-0.5'
+                  )}
+                />
+              </span>
+              Signalements anti-capture : {row.reportsEnabled ? 'activés' : 'désactivés'}
+            </button>
+          </div>
 
           {/* Réinitialiser le PIN */}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -1095,6 +1237,778 @@ function SecurityTab({ onDone }: { onDone: () => void }) {
           pédagogique — qui reste dans le tableau de bord enseignant, protégé par le PIN
           de chaque séance.
         </p>
+      </section>
+    </div>
+  )
+}
+
+// ---------------- v3.0.0 : onglet Comptes (enseignants) ----------------
+
+/** Mot de passe généré/renouvelé, montré UNE seule fois + lien email. */
+function PasswordReveal({
+  firstName,
+  lastName,
+  email,
+  password,
+  onDone,
+}: {
+  firstName: string
+  lastName: string
+  email: string
+  password: string
+  onDone: () => void
+}) {
+  const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(
+    'Votre mot de passe TBL Live'
+  )}&body=${encodeURIComponent(
+    `Bonjour ${firstName},\n\nVoici votre mot de passe pour TBL Live :\n\n${password}\n\nConnectez-vous avec votre email institutionnel (${email}) puis changez ce mot de passe depuis « Mon compte » si vous le souhaitez.\n\nBonne séance !`
+  )}`
+  return (
+    <div className="space-y-3 rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4">
+      <p className="text-sm font-bold text-emerald-900">
+        Mot de passe de {firstName} {lastName} — à communiquer maintenant
+      </p>
+      <p className="text-xs leading-relaxed text-emerald-800">
+        Ce mot de passe n&apos;est jamais stocké en clair : il ne sera plus visible après la
+        fermeture de cet encadré. Envoyez-le à l&apos;enseignant(e) par email (le message est
+        préparé), ou notez-le : en cas de perte, générez-en un nouveau ici.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <code className="select-all rounded-xl border border-emerald-300 bg-white px-4 py-2 font-mono text-lg font-bold tracking-widest text-emerald-900">
+          {password}
+        </code>
+        <a
+          href={mailto}
+          className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700"
+        >
+          <Mail className="h-4 w-4" /> L&apos;envoyer par email
+        </a>
+        <Button variant="outline" className="h-10 border-emerald-300" onClick={onDone}>
+          <Check className="mr-1 h-4 w-4" /> J&apos;ai communiqué ce mot de passe
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function AccountsTab({ call }: { call: CallFn }) {
+  const [rows, setRows] = useState<AdminAccountRow[] | null>(null)
+  const [domain, setDomain] = useState('')
+  const [domainDraft, setDomainDraft] = useState('')
+  const [error, setError] = useState('')
+  // Formulaire de création
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [reveal, setReveal] = useState<{ firstName: string; lastName: string; email: string; password: string } | null>(null)
+  // Import Excel
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<{
+    created: number
+    total: number
+    problems: { line: number; email: string; reason: string }[]
+    accounts: { line: number; firstName: string; lastName: string; email: string; password: string }[]
+  } | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api<{ accounts: AdminAccountRow[]; domain: string }>('/api/admin', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'list_accounts' }),
+      })
+      setRows(res.accounts)
+      setDomain(res.domain)
+      setDomainDraft(res.domain)
+      setError('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur inconnue.')
+    }
+  }, [])
+
+  useEffect(() => {
+    Promise.resolve().then(load).catch(() => undefined)
+  }, [load])
+
+  if (error) {
+    return <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>
+  }
+  if (!rows) {
+    return (
+      <div className="flex h-32 items-center justify-center">
+        <div className="h-7 w-7 animate-spin rounded-full border-4 border-emerald-200 border-t-emerald-600" />
+      </div>
+    )
+  }
+
+  const createAccount = async () => {
+    if (creating) return
+    setCreating(true)
+    try {
+      const res = await call({
+        action: 'create_account',
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim(),
+        password: password.trim(),
+      })
+      if (res && typeof res.password === 'string') {
+        setReveal({
+          firstName: firstName.trim() || '—',
+          lastName: lastName.trim() || '—',
+          email: email.trim(),
+          password: res.password,
+        })
+        setFirstName('')
+        setLastName('')
+        setEmail('')
+        setPassword('')
+        await load()
+      }
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const importFile = async (file: File) => {
+    if (importing) return
+    setImporting(true)
+    setImportResult(null)
+    try {
+      const buffer = new Uint8Array(await file.arrayBuffer())
+      // Encodage base64 (découpage par tranches pour les gros fichiers)
+      let binary = ''
+      const CHUNK = 0x8000
+      for (let i = 0; i < buffer.length; i += CHUNK) {
+        binary += String.fromCharCode(...buffer.subarray(i, i + CHUNK))
+      }
+      const res = await api<{
+        created: number
+        total: number
+        problems: { line: number; email: string; reason: string }[]
+        accounts: { line: number; firstName: string; lastName: string; email: string; password: string }[]
+      }>('/api/admin', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'import_accounts',
+          fileBase64: btoa(binary),
+          filename: file.name,
+        }),
+      })
+      setImportResult(res)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur inconnue.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const downloadTemplate = () => {
+    const blob = buildXlsx([
+      {
+        name: 'Comptes',
+        rows: [
+          ['Prénom', 'Nom', 'Email institutionnel', 'Mot de passe'],
+          ['', '', '', ''],
+        ],
+        colWidths: { 0: 20, 1: 20, 2: 34, 3: 22 },
+      },
+    ])
+    downloadBlob(blob, 'modele-comptes-enseignants.xlsx')
+  }
+
+  return (
+    <div className="space-y-5">
+      {reveal && (
+        <PasswordReveal
+          firstName={reveal.firstName}
+          lastName={reveal.lastName}
+          email={reveal.email}
+          password={reveal.password}
+          onDone={() => setReveal(null)}
+        />
+      )}
+
+      {/* Domaine institutionnel */}
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">Domaine institutionnel des emails</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+            Les emails des comptes enseignants doivent se terminer par ce domaine (un seul
+            compte par enseignant, aucun doublon). Si votre établissement change de domaine,
+            modifiez-le ici : les comptes existants restent valables, les nouvelles créations
+            exigent le nouveau domaine.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={domainDraft}
+            onChange={(e) => setDomainDraft(e.target.value.toLowerCase())}
+            placeholder="@famso.u-sousse.tn"
+            className="h-11 w-64"
+            aria-label="Domaine institutionnel"
+          />
+          <Button
+            className="h-11 bg-emerald-600 hover:bg-emerald-700"
+            disabled={domainDraft === domain}
+            onClick={async () => {
+              await call(
+                { action: 'set_email_domain', domain: domainDraft },
+                'Domaine institutionnel enregistré.'
+              )
+              await load()
+            }}
+          >
+            <Save className="mr-2 h-4 w-4" /> Enregistrer
+          </Button>
+        </div>
+      </section>
+
+      {/* Création manuelle */}
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">Ajouter un compte enseignant</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+            Le mot de passe peut rester vide : un mot de passe lisible sera généré (vous pourrez
+            l&apos;envoyer par email depuis l&apos;encadré vert). L&apos;enseignant(e) peut ensuite
+            changer son mot de passe depuis l&apos;application (« Mon compte »).
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            placeholder="Prénom"
+            className="h-11"
+            aria-label="Prénom"
+          />
+          <Input
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            placeholder="Nom"
+            className="h-11"
+            aria-label="Nom"
+          />
+          <Input
+            value={email}
+            onChange={(e) => setEmail(e.target.value.toLowerCase())}
+            placeholder={`email${domain || '@domaine'}`}
+            type="email"
+            className="h-11 sm:col-span-2"
+            aria-label="Email institutionnel"
+          />
+          <Input
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Mot de passe (vide = généré)"
+            className="h-11 sm:col-span-2"
+            aria-label="Mot de passe (facultatif)"
+          />
+        </div>
+        <Button
+          className="h-11 bg-emerald-600 hover:bg-emerald-700"
+          disabled={creating || firstName.trim().length < 2 || lastName.trim().length < 2 || !email.includes('@')}
+          onClick={createAccount}
+        >
+          {creating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+          Créer le compte
+        </Button>
+      </section>
+
+      {/* Import Excel */}
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">Téléverser un fichier Excel de comptes</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+            Une ligne par enseignant, dans l&apos;ordre : <strong>Prénom · Nom · Email
+            institutionnel · Mot de passe</strong>. La première ligne est ignorée si c&apos;est un
+            en-tête (Prénom, Nom…). Les mots de passe vides sont générés automatiquement. Les
+            emails déjà utilisés sont ignorés (rapport détaillé après import) : jamais de doublon.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">
+            {importing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            {importing ? 'Import en cours…' : 'Choisir le fichier Excel (.xlsx ou .csv)'}
+            <input
+              type="file"
+              accept=".xlsx,.csv"
+              className="hidden"
+              disabled={importing}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (f) void importFile(f)
+              }}
+            />
+          </label>
+          <Button variant="outline" className="h-11 border-stone-300" onClick={downloadTemplate}>
+            Télécharger le modèle Excel
+          </Button>
+        </div>
+        {importResult && (
+          <div className="space-y-2 rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm">
+            <p className="font-semibold text-stone-800">
+              {importResult.created} compte(s) créé(s) sur {importResult.total} ligne(s)
+              {importResult.problems.length > 0 && ` · ${importResult.problems.length} ligne(s) ignorée(s)`}
+            </p>
+            {importResult.accounts.length > 0 && (
+              <details open className="space-y-1">
+                <summary className="cursor-pointer font-semibold text-emerald-800">
+                  Mots de passe à communiquer ({importResult.accounts.length})
+                </summary>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-stone-500">
+                        <th className="py-1 pr-2">Enseignant</th>
+                        <th className="py-1 pr-2">Email</th>
+                        <th className="py-1">Mot de passe</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importResult.accounts.map((a) => (
+                        <tr key={a.email} className="border-t border-stone-200">
+                          <td className="py-1 pr-2">{a.firstName} {a.lastName}</td>
+                          <td className="py-1 pr-2">{a.email}</td>
+                          <td className="py-1 font-mono font-bold select-all">{a.password}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-stone-500">
+                  Ces mots de passe ne seront plus visibles après fermeture : envoyez-les par
+                  email maintenant (colonne copiable d&apos;un clic).
+                </p>
+              </details>
+            )}
+            {importResult.problems.length > 0 && (
+              <details className="space-y-1">
+                <summary className="cursor-pointer font-semibold text-amber-700">
+                  Lignes ignorées ({importResult.problems.length})
+                </summary>
+                <ul className="list-disc space-y-0.5 pl-5 text-xs text-stone-600">
+                  {importResult.problems.map((p, i) => (
+                    <li key={i}>
+                      Ligne {p.line} {p.email ? `(${p.email})` : ''} — {p.reason}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Liste des comptes */}
+      <section className="space-y-3">
+        <p className="text-sm text-stone-600">
+          {rows.length} compte(s) enseignant(s) — connexion obligatoire pour ouvrir des séances.
+        </p>
+        {rows.length === 0 ? (
+          <p className="rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-8 text-center text-sm text-stone-500">
+            Aucun compte enseignant pour le moment : créez-en un ci-dessus (ou importez le
+            fichier Excel). Tant qu&apos;aucun compte n&apos;existe, personne ne peut créer de
+            séance sur cette application.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {rows.map((a) => (
+              <AccountCard key={a.id} row={a} call={call} onChanged={load} />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function AccountCard({
+  row,
+  call,
+  onChanged,
+}: {
+  row: AdminAccountRow
+  call: CallFn
+  onChanged: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [firstName, setFirstName] = useState(row.firstName)
+  const [lastName, setLastName] = useState(row.lastName)
+  const [email, setEmail] = useState(row.email)
+  const [reveal, setReveal] = useState<string | null>(null)
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
+      {reveal !== null && (
+        <div className="mb-3">
+          <PasswordReveal
+            firstName={row.firstName}
+            lastName={row.lastName}
+            email={row.email}
+            password={reveal}
+            onDone={() => {
+              setReveal(null)
+              onChanged()
+            }}
+          />
+        </div>
+      )}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[15px] font-semibold text-stone-900">
+              {row.firstName} {row.lastName}
+            </p>
+            {row.forgotPending && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">
+                mot de passe oublié — demande en attente
+              </span>
+            )}
+            {row.lockedUntil && new Date(row.lockedUntil) > new Date() && (
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
+                verrouillé (trop de tentatives)
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs text-stone-500">
+            {row.email} · {row.sessions} séance(s) créée(s) · compte du {fmtDate(row.createdAt)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {row.forgotPending && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9 border-amber-300 text-amber-800 hover:bg-amber-50"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                await call({ action: 'clear_forgot', id: row.id })
+                setBusy(false)
+                onChanged()
+              }}
+              title="Marquer la demande comme traitée (badge ambre)"
+            >
+              Marquer la demande vue
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              const res = await call({ action: 'reset_account_password', id: row.id })
+              setBusy(false)
+              if (res && typeof res.password === 'string') {
+                setReveal(res.password)
+              }
+            }}
+            title="Générer un nouveau mot de passe (l'ancien ne fonctionne plus, les sessions ouvertes sont déconnectées)"
+          >
+            <KeyRound className="mr-1 h-3.5 w-3.5" />
+            {row.forgotPending ? 'Nouveau mot de passe' : 'Réinitialiser'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9 border-stone-300"
+            disabled={busy}
+            onClick={() => setEditing((v) => !v)}
+          >
+            Modifier
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-9 text-red-600 hover:bg-red-50"
+            disabled={busy}
+            onClick={async () => {
+              if (
+                window.confirm(
+                  `Supprimer le compte de ${row.firstName} ${row.lastName} ?\n\nSes séances restent intactes et utilisables (code + PIN) : seule la propriété est retirée. Cette action est définitive.`
+                )
+              ) {
+                setBusy(true)
+                await call({ action: 'delete_account', id: row.id }, 'Compte supprimé.')
+                setBusy(false)
+                onChanged()
+              }
+            }}
+          >
+            <Trash2 className="mr-1 h-3.5 w-3.5" /> Supprimer
+          </Button>
+        </div>
+      </div>
+      {editing && (
+        <div className="mt-3 grid gap-2 border-t border-stone-100 pt-3 sm:grid-cols-3">
+          <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Prénom" className="h-10" aria-label="Prénom" />
+          <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Nom" className="h-10" aria-label="Nom" />
+          <Input value={email} onChange={(e) => setEmail(e.target.value.toLowerCase())} placeholder="Email institutionnel" className="h-10" aria-label="Email" />
+          <div className="sm:col-span-3">
+            <Button
+              className="h-10 bg-emerald-600 hover:bg-emerald-700"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                const res = await call({ action: 'update_account', id: row.id, firstName, lastName, email })
+                setBusy(false)
+                if (res) setEditing(false)
+                onChanged()
+              }}
+            >
+              <Save className="mr-2 h-4 w-4" /> Enregistrer les modifications
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------- v3.0.0 : onglet Apparence ----------------
+
+const ICON_LABELS: Record<string, string> = {
+  GraduationCap: 'Toge de diplômé',
+  BookOpen: 'Livre ouvert',
+  HeartPulse: 'Battement de cœur',
+  Stethoscope: 'Stéthoscope',
+  FlaskConical: 'Fiole de laboratoire',
+  University: 'Université',
+  Lightbulb: 'Ampoule',
+  Sparkles: 'Étincelles',
+  Presentation: 'Présentation au tableau',
+  UserRound: 'Personne',
+  ClipboardCheck: 'Liste de contrôle',
+  PenLine: 'Stylo',
+  Users: 'Groupe',
+  UsersRound: 'Groupe (rond)',
+  Smile: 'Sourire',
+}
+
+function AppearanceTab({
+  theme,
+  call,
+}: {
+  theme: ThemeConfig
+  call: CallFn
+}) {
+  const [draft, setDraft] = useState<ThemeConfig>({ ...theme })
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(true)
+
+  const update = (patch: Partial<ThemeConfig>) => {
+    const next = { ...draft, ...patch }
+    setDraft(next)
+    setSaved(false)
+    // Aperçu immédiat : les couleurs s'appliquent à l'instant (et
+    // disparaissent au rechargement tant que ce n'est pas enregistré).
+    import('@/lib/theme-client').then((m) => m.applyTheme(next))
+  }
+
+  const iconChoice = (kind: ThemeIconKind, choices: readonly string[], label: string) => (
+    <div className="space-y-1">
+      <Label className="text-xs font-semibold text-stone-700">{label}</Label>
+      <select
+        value={draft.icons?.[kind] ?? ''}
+        onChange={(e) =>
+          update({
+            icons: { ...draft.icons, [kind]: e.target.value || undefined },
+          })
+        }
+        className="h-11 w-full rounded-xl border border-stone-300 bg-white px-3 text-sm"
+      >
+        <option value="">Icône d&apos;origine</option>
+        {choices.map((c) => (
+          <option key={c} value={c}>
+            {ICON_LABELS[c] ?? c}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+
+  return (
+    <div className="space-y-5">
+      <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+        <div>
+          <p className="text-sm font-bold text-stone-900">Couleurs et icônes de l&apos;application</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+            La couleur principale colore boutons, liens et en-têtes ; la couleur d&apos;accent,
+            la rubrique étudiante ; le fond teinte toutes les pages. L&apos;aperçu est immédiat
+            sur CETTE page et l&apos;application — enregistrez pour l&apos;appliquer à tous les
+            appareils à leur prochaine ouverture. Le fond doit rester clair (texte sombre
+            dessous).
+          </p>
+        </div>
+
+        {/* Palettes prêtes à l'emploi */}
+        <div className="flex flex-wrap gap-2">
+          {THEME_PRESETS.map((p) => (
+            <button
+              key={p.name}
+              type="button"
+              onClick={() => update({ ...p.theme, icons: draft.icons })}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-stone-300 px-3 text-sm font-medium text-stone-700 hover:border-emerald-400 hover:bg-emerald-50"
+            >
+              {p.theme.primary && (
+                <span
+                  className="h-4 w-4 rounded-full border border-stone-300"
+                  style={{ backgroundColor: p.theme.primary }}
+                />
+              )}
+              {p.name}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-stone-700">Couleur principale</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={draft.primary ?? '#059669'}
+                onChange={(e) => update({ primary: e.target.value })}
+                className="h-11 w-14 cursor-pointer rounded-xl border border-stone-300 bg-white p-1"
+                aria-label="Couleur principale"
+              />
+              {draft.primary && (
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-stone-400 hover:text-stone-700"
+                  onClick={() => update({ primary: undefined })}
+                >
+                  origine
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-stone-700">Couleur d&apos;accent (étudiants)</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={draft.accent ?? '#d97706'}
+                onChange={(e) => update({ accent: e.target.value })}
+                className="h-11 w-14 cursor-pointer rounded-xl border border-stone-300 bg-white p-1"
+                aria-label="Couleur d'accent"
+              />
+              {draft.accent && (
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-stone-400 hover:text-stone-700"
+                  onClick={() => update({ accent: undefined })}
+                >
+                  origine
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-semibold text-stone-700">Fond des pages</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={draft.background ?? '#fafaf9'}
+                onChange={(e) => update({ background: e.target.value })}
+                className="h-11 w-14 cursor-pointer rounded-xl border border-stone-300 bg-white p-1"
+                aria-label="Fond des pages"
+              />
+              {draft.background && (
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-stone-400 hover:text-stone-700"
+                  onClick={() => update({ background: undefined })}
+                >
+                  origine
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          {iconChoice('logo', THEME_ICON_CHOICES.logo, 'Icône du logo (en-tête)')}
+          {iconChoice('teacher', THEME_ICON_CHOICES.teacher, 'Icône de la carte enseignant')}
+          {iconChoice('student', THEME_ICON_CHOICES.student, 'Icône de la carte étudiant')}
+        </div>
+
+        {/* Aperçu */}
+        <div className="grid gap-3 rounded-2xl border border-stone-200 p-4 sm:grid-cols-2">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+              {(() => {
+                const I = themeIcon('teacher', draft.icons?.teacher)
+                return <I className="h-5 w-5" />
+              })()}
+            </span>
+            <span className="rounded-2xl border-2 border-stone-200 bg-white p-3 text-sm font-bold">
+              Je suis enseignant
+            </span>
+            <Button size="sm" className="h-9 bg-emerald-600 hover:bg-emerald-700">
+              Bouton principal
+            </Button>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              {(() => {
+                const I = themeIcon('student', draft.icons?.student)
+                return <I className="h-5 w-5" />
+              })()}
+            </span>
+            <span className="rounded-2xl border-2 border-stone-200 bg-white p-3 text-sm font-bold">
+              Je suis étudiant
+            </span>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">
+              Badge accent
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            className="h-11 bg-emerald-600 hover:bg-emerald-700"
+            disabled={busy || saved}
+            onClick={async () => {
+              setBusy(true)
+              await call({ action: 'set_theme', theme: draft }, 'Apparence enregistrée — visible par tous à la prochaine ouverture.')
+              setBusy(false)
+              setSaved(true)
+              await reloadAppConfig()
+            }}
+          >
+            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Enregistrer l&apos;apparence
+          </Button>
+          <Button
+            variant="outline"
+            className="h-11 border-stone-300"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              await call({ action: 'reset_theme' }, 'Apparence réinitialisée (thème d\u2019origine).')
+              setDraft({})
+              setSaved(true)
+              setBusy(false)
+              import('@/lib/theme-client').then((m) => m.applyTheme({}))
+              await reloadAppConfig()
+            }}
+          >
+            <RotateCcw className="mr-2 h-4 w-4" /> Réinitialiser
+          </Button>
+          {!saved && (
+            <span className="text-xs text-amber-700">
+              Modifications non enregistrées (aperçu local uniquement).
+            </span>
+          )}
+        </div>
       </section>
     </div>
   )

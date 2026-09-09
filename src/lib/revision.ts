@@ -55,3 +55,29 @@ export function readRevParam(url: URL): number | null {
   if (!Number.isInteger(n) || n < 0 || n > 2_000_000_000) return null
   return n
 }
+
+/**
+ * v3.0.0 — Incrémente le compteur de révision d'UNE ÉQUIPE (+ le
+ * compteur enseignant). Utilisé par les réponses tRAT : seuls les
+ * membres de l'équipe voient la carte à gratter progresser — les
+ * autres étudiants n'ont rien à renouveler, la classe ne déclenche
+ * plus une tempête de rechargements à chaque réponse d'une équipe.
+ */
+export async function bumpTeamRevision(sessionId: string, teamId: string): Promise<void> {
+  try {
+    await db.session.update({
+      where: { id: sessionId },
+      data: { revisionTeacher: { increment: 1 } },
+    })
+  } catch {
+    // séance supprimée entre-temps : rien à faire
+  }
+  try {
+    await db.team.update({
+      where: { id: teamId },
+      data: { revisionTeam: { increment: 1 } },
+    })
+  } catch {
+    // équipe supprimée entre-temps (changement d'effectif) : rien à faire
+  }
+}

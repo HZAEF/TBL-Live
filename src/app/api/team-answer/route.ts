@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withMetrics } from '@/lib/metrics'
 import { db } from '@/lib/db'
-import { bumpRevisions } from '@/lib/revision'
+import { bumpTeamRevision } from '@/lib/revision'
 
 // Barème IF-AT : tentative 1 = 4 pts, tentative 2 = 2 pts, tentative 3 = 1 pt, ensuite 0
 const TRAT_POINTS = [4, 2, 1, 0]
 
 // POST /api/team-answer — réponse d'équipe (tRAT) avec feedback immédiat
-export async function POST(req: NextRequest) {
+async function doPOST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     const token = body?.token
@@ -54,63 +55,78 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Choix invalide.' }, { status: 400 })
     }
 
-    // Transaction : évite deux clics simultanés dans l'équipe.
-    // v2.4.0 : la contrainte unique @@unique([teamId, questionId, kind,
-    // attempt]) en base est le verrou DÉFINITIF — même sous l'isolation
-    // « read committed » (défaut PostgreSQL/Neon), deux requêtes vraiment
-    // simultanées dans la même équipe ne peuvent plus créer deux tentatives
-    // portant le même numéro : la seconde est rejetée par la base (erreur
-    // Prisma P2002) et reçoit un message clair.
-    const result = await db
-      .$transaction(async (tx) => {
-        const previous = await tx.answer.findMany({
-          where: { questionId, teamId: student.teamId!, kind: 'trat' },
-          orderBy: { attempt: 'asc' },
-        })
-        if (previous.some((a) => a.isCorrect)) {
-          return { error: 'Votre équipe a déjà trouvé la bonne réponse à cette question.' }
-        }
-        if (previous.length >= 4) {
-          return { error: 'Les 4 tentatives sont épuisées pour cette question.' }
-        }
-        const attempt = previous.length + 1
-        const isCorrect = choice === question.correct
-        const score = isCorrect ? TRAT_POINTS[attempt - 1] : 0
-        await tx.answer.create({
-          data: {
-            questionId,
-            teamId: student.teamId!,
-            kind: 'trat',
-            choice,
-            attempt,
-            isCorrect,
-            score,
-          },
-        })
-        return { attempt, isCorrect, score, pointsIfCorrect: TRAT_POINTS[attempt] ?? 0 }
+    // v3.0.0 — ÉCRITURE SANS TRANSACTION INTERACTIVE : les lectures
+    // (tentatives précédentes) se font HORS transaction — elles ne
+    // posent AUCUN verrou en écriture — et l'insertion reste protégée
+    // par la contrainte unique @@unique([teamId, questionId, kind,
+    // attempt]) : deux clics vraiment simultanés dans la même équipe
+    // produisent UNE tentative (la seconde reçoit P2002 → message
+    // clair « double envoi »). Pourquoi c'est plus fluide : une
+    // transaction interactive garde une connexion ET un verrou
+    // d'écriture SQLite pendant TOUTE sa durée ; avec 150 étudiants
+    // cliquant en même temps, elles s'empilaient (P1008 « 20 s
+    // depuis le début de la transaction »). Sans transaction, chaque
+    // insertion ne verrouille que quelques millisecondes — la file
+    // d'attente s'écoule instantanément, même en rafale.
+    const previous = await db.answer.findMany({
+      where: { questionId, teamId: student.teamId!, kind: 'trat' },
+      orderBy: { attempt: 'asc' },
+    })
+    if (previous.some((a) => a.isCorrect)) {
+      return NextResponse.json(
+        { error: 'Votre équipe a déjà trouvé la bonne réponse à cette question.' },
+        { status: 409 }
+      )
+    }
+    if (previous.length >= 4) {
+      return NextResponse.json(
+        { error: 'Les 4 tentatives sont épuisées pour cette question.' },
+        { status: 409 }
+      )
+    }
+    const attempt = previous.length + 1
+    const isCorrect = choice === question.correct
+    const score = isCorrect ? TRAT_POINTS[attempt - 1] : 0
+    let result: { attempt: number; isCorrect: boolean; score: number; pointsIfCorrect: number } | { error: string }
+    try {
+      await db.answer.create({
+        data: {
+          questionId,
+          teamId: student.teamId!,
+          kind: 'trat',
+          choice,
+          attempt,
+          isCorrect,
+          score,
+        },
       })
-      .catch((e: unknown) => {
-        if (
-          e &&
-          typeof e === 'object' &&
-          'code' in e &&
-          (e as { code?: string }).code === 'P2002'
-        ) {
-          // Double envoi simultané (même numéro de tentative) : l'autre
-          // requête a déjà enregistré cette tentative.
-          return {
-            error: 'Double envoi détecté : votre équipe a déjà répondu à cette question.',
-          }
-        }
+      result = { attempt, isCorrect, score, pointsIfCorrect: TRAT_POINTS[attempt] ?? 0 }
+    } catch (e) {
+      if (
+        e &&
+        typeof e === 'object' &&
+        'code' in e &&
+        (e as { code?: string }).code === 'P2002'
+      ) {
+        // Double envoi simultané (même numéro de tentative) : l'autre
+        // requête a déjà enregistré cette tentative.
+        result = { error: 'Double envoi détecté : votre équipe a déjà répondu à cette question.' }
+      } else {
         throw e
-      })
+      }
+    }
 
     if ('error' in result && result.error) {
       return NextResponse.json({ error: result.error }, { status: 409 })
     }
 
     // v2.9.0 : tentative tRAT enregistrée → compteurs + 1.
-    await bumpRevisions(student.sessionId)
+    // v3.0.0 — La tentative tRAT est visible par les MEMBRES DE
+    // L'ÉQUIPE uniquement (carte à gratter) + le tableau de bord :
+    // compteur d'équipe, PAS la révision globale. Les autres équipes
+    // n'ont rien à renouveler — chacune progresse à son rythme sans
+    // déclencher de tempête de rechargements chez toute la classe.
+    await bumpTeamRevision(student.sessionId, student.teamId!)
 
     return NextResponse.json(result)
   } catch (e) {
@@ -118,3 +134,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })
   }
 }
+
+export const POST = withMetrics<unknown>(
+  'team-answer',
+  doPOST
+)

@@ -90,7 +90,11 @@ export async function POST(req: NextRequest) {
     }
 
     // v2.9.0 : évaluations par les pairs enregistrées → compteurs + 1.
-    await bumpRevisions(student.sessionId)
+    // v3.0.0 — Les évaluations par les pairs ne sont visibles que
+    // par l'enseignant (moyennes/commentaires) : compteur enseignant
+    // seul — l'étudiant qui vient de voter voit sa confirmation par
+    // le rafraîchissement forcé de son propre écran.
+    await bumpRevisions(student.sessionId, { student: false })
 
     return NextResponse.json({ ok: true })
   } catch (e) {

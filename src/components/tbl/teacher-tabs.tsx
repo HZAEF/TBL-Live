@@ -1771,6 +1771,12 @@ export function ConfigurationsTab({
 
   return (
     <div className="space-y-5">
+      {/* v3.0.0 — pouls de la séance EN DIRECT : étudiants actifs
+          (vu dans la dernière minute) et requêtes/minute. Une requête
+          minuscule toutes les 10 s : l'enseignante repère immédiatement
+          un problème pendant le cours (serveur local = chiffres exacts). */}
+      <LiveStatsCard />
+
       {/* ---- Paramètres de la séance ---- */}
       <section className="space-y-4 rounded-2xl border border-stone-200 bg-white p-4">
         <div>
@@ -2645,4 +2651,58 @@ export function exportXlsx(
     },
   ])
   downloadBlob(blob, `resultats-tbl-${data.session.code}.xlsx`)
+}
+
+// v3.0.0 — Pouls de la séance en direct (étudiants actifs, charge).
+function LiveStatsCard() {
+  const { t } = useI18n()
+  const [stats, setStats] = useState<{ activeStudents: number; requestsPerMinute: number } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/config?live=1', { cache: 'no-store' })
+        if (res.ok && alive) {
+          const d = (await res.json()) as { live?: { activeStudents?: number; requestsPerMinute?: number } }
+          if (d.live) {
+            setStats({
+              activeStudents: d.live.activeStudents ?? 0,
+              requestsPerMinute: d.live.requestsPerMinute ?? 0,
+            })
+          }
+        }
+      } catch {
+        // indicateur silencieux : jamais bloquant
+      }
+    }
+    void tick()
+    const id = setInterval(tick, 10_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
+
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex items-center gap-3">
+        <span className="relative flex h-3 w-3">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+          <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
+        </span>
+        <p className="text-sm font-bold text-emerald-900">{t('Pouls de la séance (en direct)')}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm text-emerald-900">
+        <span>
+          <strong className="text-lg">{stats?.activeStudents ?? '…'}</strong>{' '}
+          {t('étudiant(s) actif(s)')}
+        </span>
+        <span>
+          <strong className="text-lg">{stats?.requestsPerMinute ?? '…'}</strong>{' '}
+          {t('requêtes / minute')}
+        </span>
+      </div>
+    </section>
+  )
 }

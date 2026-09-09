@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withMetrics } from '@/lib/metrics'
 import { db } from '@/lib/db'
 import { getSessionByCode, parseChoices, extractToken, safeEqualStrings } from '@/lib/tbl'
 import { applyLifecycle } from '@/lib/session-lifecycle'
@@ -14,7 +15,7 @@ import { readRevParam } from '@/lib/revision'
 // séance vaut toujours N, réponse minuscule { unchanged: true } (une
 // requête au lieu de quatorze) ; le moindre changement (réponse
 // d'étudiant, signalement, phase…) redonne l'état complet.
-export async function GET(
+async function doGET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
@@ -112,19 +113,25 @@ export async function GET(
         }),
         // v2.5.0 : signalements anti-capture (capture suspectée / sortie
         // d'application) — les plus récents d'abord, volume borné.
-        db.alertEvent.findMany({
-          where: { student: { sessionId: session.id } },
-          orderBy: { createdAt: 'desc' },
-          take: 200,
-          select: {
-            id: true,
-            studentId: true,
-            kind: true,
-            phase: true,
-            createdAt: true,
-            student: { select: { name: true } },
-          },
-        }),
+        // v3.0.0 : requête EXÉCUTÉE uniquement si les signalements sont
+        // activés pour cette séance (défaut : désactivés) — une requête
+        // de moins à chaque sondage du tableau de bord, et l'onglet
+        // « Signalements » ne s'affiche pas.
+        live.reportsEnabled
+          ? db.alertEvent.findMany({
+              where: { student: { sessionId: session.id } },
+              orderBy: { createdAt: 'desc' },
+              take: 200,
+              select: {
+                id: true,
+                studentId: true,
+                kind: true,
+                phase: true,
+                createdAt: true,
+                student: { select: { name: true } },
+              },
+            })
+          : Promise.resolve([]),
         // v2.6.0 : questionnaire de fin de séance (TBL-SAI) — items de la
         // séance, réponses agrégées par item et commentaires libres.
         db.saiItem.findMany({
@@ -187,6 +194,8 @@ export async function GET(
         // Corbeille (null = séance active) et purge des données étudiantes
         deletedAt: live.deletedAt,
         dataPurgedAt: live.dataPurgedAt,
+        // v3.0.0 : signalements anti-capture activés pour cette séance ?
+        reportsEnabled: live.reportsEnabled === true,
       },
       questions: questions.map((q) => ({
         id: q.id,
@@ -266,3 +275,8 @@ export async function GET(
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })
   }
 }
+
+export const GET = withMetrics<{ params: Promise<{ code: string }> }>(
+  'dashboard',
+  doGET
+)

@@ -5,6 +5,11 @@ import { hashPin, verifyPin } from '@/lib/pin'
 import { isValidPin, normalizePin, generateUniqueCode, randomToken } from '@/lib/tbl'
 import { isTrashExpired } from '@/lib/session-lifecycle'
 import { FR_KEYS } from '@/lib/i18n/fr-keys'
+import { bumpRevisions } from '@/lib/revision'
+import { generateTeacherPassword, normalizeTeacherEmail, isPlausibleEmail, checkEmailDomain } from '@/lib/teacher-auth'
+import { sanitizeTheme, parseStoredTheme } from '@/lib/theme'
+import { parseAccountsFile, TableReadError } from '@/lib/xlsx-reader'
+import { perfSnapshot } from '@/lib/metrics'
 
 // ============================================================
 // TBL Live v2.9.0 — Espace administrateur (/admin)
@@ -22,7 +27,7 @@ import { FR_KEYS } from '@/lib/i18n/fr-keys'
 //  - renommer une séance, régénérer son code d'accès, réinitialiser
 //    son code PIN enseignant ;
 //  - mettre une séance à la corbeille, la restaurer, la supprimer
-//    DÉFINITIVEMENT — individuellement ou EN BLOC ;
+//    DÉFINITIVEMENT — individuellement ou EN BLOC (v3.0.0 : sélection multiple, boutons en haut) ;
 //  - régler le délai du cycle de synchronisation Internet ↔ réseau
 //    local (2 s à 60 s) ;
 //  - personnaliser N'IMPORTE QUEL texte de l'application (clé = le
@@ -102,6 +107,9 @@ export async function GET(req: NextRequest) {
       needsSetup,
       syncIntervalMs: row ? row.syncIntervalMs : 5000,
       textsCount: row ? Object.keys(parseTextOverrides(row.textOverrides)).length : 0,
+      // v3.0.0 — domaine des emails institutionnels + thème réglés.
+      teacherEmailDomain: row ? row.teacherEmailDomain : '@famso.u-sousse.tn',
+      theme: row ? parseStoredTheme(row.theme) : {},
       ...(withKeys ? { keys: FR_KEYS } : {}),
     })
   } catch {
@@ -125,6 +133,18 @@ interface AdminAction {
   ms?: unknown
   key?: unknown
   value?: unknown
+  // v3.0.0 — comptes enseignants
+  id?: unknown
+  firstName?: unknown
+  lastName?: unknown
+  email?: unknown
+  domain?: unknown
+  fileBase64?: unknown
+  filename?: unknown
+  // v3.0.0 — apparence
+  theme?: unknown
+  // v3.0.0 — signalements par TBL
+  enabled?: unknown
 }
 
 export async function POST(req: NextRequest) {
@@ -247,6 +267,8 @@ export async function POST(req: NextRequest) {
             deletedAt: true,
             dataPurgedAt: true,
             syncedAt: true,
+            teacherId: true,
+            reportsEnabled: true,
             _count: { select: { students: true, teams: true, questions: true, cases: true } },
           },
         })
@@ -257,22 +279,44 @@ export async function POST(req: NextRequest) {
             db.answer.count({ where: { question: { sessionId: s.id } } })
           )
         )
+        // v3.0.0 — propriétaires (comptes enseignants) des séances :
+        // une seule requête, jointe côté serveur.
+        const teacherIds = [
+          ...new Set(sessions.map((s) => s.teacherId).filter((x): x is string => !!x)),
+        ]
+        const teachers = teacherIds.length
+          ? await db.teacherAccount.findMany({
+              where: { id: { in: teacherIds } },
+              select: { id: true, firstName: true, lastName: true, email: true },
+            })
+          : []
+        const teacherById = new Map(teachers.map((t) => [t.id, t]))
         return NextResponse.json({
-          sessions: sessions.map((s, i) => ({
-            id: s.id,
-            code: s.code,
-            title: s.title,
-            status: s.status,
-            createdAt: s.createdAt.toISOString(),
-            deletedAt: s.deletedAt ? s.deletedAt.toISOString() : null,
-            dataPurgedAt: s.dataPurgedAt ? s.dataPurgedAt.toISOString() : null,
-            syncedAt: s.syncedAt ? s.syncedAt.toISOString() : null,
-            students: s._count.students,
-            teams: s._count.teams,
-            questions: s._count.questions,
-            cases: s._count.cases,
-            answers: counts[i],
-          })),
+          sessions: sessions.map((s, i) => {
+            const owner = s.teacherId ? teacherById.get(s.teacherId) : undefined
+            return {
+              id: s.id,
+              code: s.code,
+              title: s.title,
+              status: s.status,
+              createdAt: s.createdAt.toISOString(),
+              deletedAt: s.deletedAt ? s.deletedAt.toISOString() : null,
+              dataPurgedAt: s.dataPurgedAt ? s.dataPurgedAt.toISOString() : null,
+              syncedAt: s.syncedAt ? s.syncedAt.toISOString() : null,
+              students: s._count.students,
+              teams: s._count.teams,
+              questions: s._count.questions,
+              cases: s._count.cases,
+              answers: counts[i],
+              // v3.0.0 : signalements anti-capture (désactivés par défaut)
+              reportsEnabled: s.reportsEnabled,
+              // v3.0.0 : compte propriétaire (null = séance importée
+              // par la synchronisation ou créée avant la v3.0).
+              teacher: owner
+                ? { firstName: owner.firstName, lastName: owner.lastName, email: owner.email }
+                : null,
+            }
+          }),
         })
       }
 
@@ -463,6 +507,289 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true })
       }
 
+      // ----- v3.0.0 : corbeille EN BLOC (sélection multiple) -----
+      case 'bulk_trash': {
+        const codes = readCodes(body?.codes)
+        if (codes.length === 0) {
+          return NextResponse.json({ error: 'Aucune séance sélectionnée.' }, { status: 400 })
+        }
+        const now = new Date()
+        const result = await db.session.updateMany({
+          where: { code: { in: codes }, deletedAt: null },
+          data: { deletedAt: now, updatedAt: now },
+        })
+        return NextResponse.json({ ok: true, trashed: result.count })
+      }
+
+      // ----- v3.0.0 : signalements anti-capture par TBL -----
+      case 'set_reports': {
+        const session = await findSession(body?.code)
+        if (!session) return notFound()
+        const enabled = body?.enabled === true
+        await db.session.update({
+          where: { id: session.id },
+          data: { reportsEnabled: enabled, updatedAt: new Date() },
+        })
+        // Les étudiants cessent/reprennent l'envoi et l'onglet du
+        // tableau de bord apparaît/disparaît → renouvellement immédiat.
+        await bumpRevisions(session.id)
+        return NextResponse.json({ ok: true, enabled })
+      }
+
+      // ----- v3.0.0 : instrumentation en direct -----
+      case 'perf': {
+        return NextResponse.json({ ok: true, perf: perfSnapshot() })
+      }
+
+      // ===== ESPACE COMPTES ENSEIGNANTS (v3.0.0) =====
+
+      case 'list_accounts': {
+        const accounts = await db.teacherAccount.findMany({
+          orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            forgotPasswordAt: true,
+            forgotPasswordSeenAt: true,
+            lockedUntil: true,
+            createdAt: true,
+            _count: { select: { sessions: true } },
+          },
+        })
+        const row = await getSettings()
+        return NextResponse.json({
+          domain: row.teacherEmailDomain,
+          accounts: accounts.map((a) => ({
+            id: a.id,
+            firstName: a.firstName,
+            lastName: a.lastName,
+            email: a.email,
+            sessions: a._count.sessions,
+            lockedUntil: a.lockedUntil ? a.lockedUntil.toISOString() : null,
+            // Demande de mot de passe oublié EN ATTENTE (badge ambre).
+            forgotPending:
+              !!a.forgotPasswordAt && (!a.forgotPasswordSeenAt || a.forgotPasswordSeenAt < a.forgotPasswordAt),
+            forgotPasswordAt: a.forgotPasswordAt ? a.forgotPasswordAt.toISOString() : null,
+            createdAt: a.createdAt.toISOString(),
+          })),
+        })
+      }
+
+      case 'create_account': {
+        const row = await getSettings()
+        const { firstName, lastName, email } = readAccountNames(body as AdminAction)
+        const password = typeof body?.password === 'string' ? body.password : ''
+        const err = validateNewAccount(firstName, lastName, email, password, row.teacherEmailDomain)
+        if (err) return NextResponse.json({ error: err }, { status: 400 })
+        const clash = await db.teacherAccount.findUnique({ where: { email } })
+        if (clash) {
+          return NextResponse.json(
+            { error: 'Un compte existe déjà avec cet email institutionnel (un seul compte par enseignant).' },
+            { status: 409 }
+          )
+        }
+        const finalPassword = password || generateTeacherPassword()
+        await db.teacherAccount.create({
+          data: { firstName, lastName, email, passwordHash: await hashPin(finalPassword) },
+        })
+        // Le mot de passe en clair n'est JAMAIS stocké : il n'est
+        // montré qu'ICI, une seule fois, à l'administrateur.
+        return NextResponse.json({ ok: true, password: finalPassword })
+      }
+
+      case 'update_account': {
+        const id = typeof body?.id === 'string' ? body.id : ''
+        const account = id ? await db.teacherAccount.findUnique({ where: { id } }) : null
+        if (!account) return NextResponse.json({ error: 'Compte introuvable.' }, { status: 404 })
+        const { firstName, lastName, email } = readAccountNames(body as AdminAction)
+        const data: Record<string, string> = {}
+        if (firstName && firstName !== account.firstName) data.firstName = firstName
+        if (lastName && lastName !== account.lastName) data.lastName = lastName
+        if (email && email !== account.email) {
+          const clash = await db.teacherAccount.findUnique({ where: { email } })
+          if (clash) {
+            return NextResponse.json(
+              { error: 'Un autre compte utilise déjà cet email institutionnel.' },
+              { status: 409 }
+            )
+          }
+          data.email = email
+        }
+        if (Object.keys(data).length > 0) {
+          await db.teacherAccount.update({ where: { id }, data })
+        }
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'reset_account_password': {
+        const id = typeof body?.id === 'string' ? body.id : ''
+        const account = id ? await db.teacherAccount.findUnique({ where: { id } }) : null
+        if (!account) return NextResponse.json({ error: 'Compte introuvable.' }, { status: 404 })
+        const password = typeof body?.password === 'string' ? body.password : ''
+        if (password && (password.length < 8 || password.length > 64)) {
+          return NextResponse.json(
+            { error: 'Le mot de passe doit contenir entre 8 et 64 caractères.' },
+            { status: 400 }
+          )
+        }
+        const finalPassword = password || generateTeacherPassword()
+        await db.teacherAccount.update({
+          where: { id },
+          data: {
+            passwordHash: await hashPin(finalPassword),
+            // Nouveau mot de passe → session existante invalidée,
+            // verrouillage et demande « oublié » effacés.
+            tokenHash: null,
+            tokenExpiresAt: null,
+            loginAttempts: 0,
+            lockedUntil: null,
+            forgotPasswordAt: null,
+            forgotPasswordSeenAt: new Date(),
+          },
+        })
+        return NextResponse.json({ ok: true, password: finalPassword })
+      }
+
+      case 'delete_account': {
+        const id = typeof body?.id === 'string' ? body.id : ''
+        const account = id ? await db.teacherAccount.findUnique({ where: { id } }) : null
+        if (!account) return NextResponse.json({ error: 'Compte introuvable.' }, { status: 404 })
+        // Les séances créées par ce compte RESTENT intactes et
+        // pilotables (code + PIN) : seule la propriété est retirée.
+        await db.teacherAccount.delete({ where: { id } })
+        return NextResponse.json({ ok: true })
+      }
+
+      case 'clear_forgot': {
+        const id = typeof body?.id === 'string' ? body.id : ''
+        const account = id ? await db.teacherAccount.findUnique({ where: { id } }) : null
+        if (!account) return NextResponse.json({ error: 'Compte introuvable.' }, { status: 404 })
+        if (account.forgotPasswordAt) {
+          await db.teacherAccount.update({
+            where: { id },
+            data: { forgotPasswordSeenAt: new Date() },
+          })
+        }
+        return NextResponse.json({ ok: true })
+      }
+
+      // ----- Import de comptes : fichier Excel (.xlsx) ou CSV -----
+      case 'import_accounts': {
+        const row = await getSettings()
+        const fileBase64 = typeof body?.fileBase64 === 'string' ? body.fileBase64 : ''
+        const filename = typeof body?.filename === 'string' ? body.filename.slice(0, 200) : 'comptes.xlsx'
+        if (!fileBase64) {
+          return NextResponse.json({ error: 'Fichier manquant.' }, { status: 400 })
+        }
+        if (fileBase64.length > 3_000_000) {
+          return NextResponse.json(
+            { error: 'Fichier trop volumineux (maximum 2 Mo).' },
+            { status: 400 }
+          )
+        }
+        let bytes: Uint8Array
+        try {
+          bytes = base64ToBytes(fileBase64)
+        } catch {
+          return NextResponse.json({ error: 'Fichier illisible.' }, { status: 400 })
+        }
+        let parsed: { rows: { firstName: string; lastName: string; email: string; password: string }[]; skippedHeader: boolean }
+        try {
+          parsed = parseAccountsFile(bytes, filename)
+        } catch (e) {
+          if (e instanceof TableReadError) {
+            return NextResponse.json({ error: e.message }, { status: 400 })
+          }
+          throw e
+        }
+        if (parsed.rows.length === 0) {
+          return NextResponse.json(
+            { error: 'Aucune ligne d’enseignant trouvée dans le fichier (colonnes : Prénom, Nom, Email institutionnel, Mot de passe).' },
+            { status: 400 }
+          )
+        }
+        // Création ligne par ligne : doublons ignorés avec le motif
+        // (l'administrateur voit exactement ce qui a été sauté).
+        let created = 0
+        const problems: { line: number; email: string; reason: string }[] = []
+        const createdPasswords: { line: number; firstName: string; lastName: string; email: string; password: string }[] = []
+        const seenEmails = new Set<string>()
+        for (let i = 0; i < parsed.rows.length; i++) {
+          const r = parsed.rows[i]
+          const lineNo = (parsed.skippedHeader ? 2 : 1) + i
+          const email = r.email
+          const err = validateNewAccount(r.firstName, r.lastName, email, r.password, row.teacherEmailDomain)
+          if (err) {
+            problems.push({ line: lineNo, email, reason: err })
+            continue
+          }
+          if (seenEmails.has(email)) {
+            problems.push({ line: lineNo, email, reason: 'Doublon dans le fichier (email déjà traité).' })
+            continue
+          }
+          const clash = await db.teacherAccount.findUnique({ where: { email } })
+          if (clash) {
+            problems.push({ line: lineNo, email, reason: 'Un compte existe déjà avec cet email (ignoré, rien n’est modifié).' })
+            continue
+          }
+          seenEmails.add(email)
+          const finalPassword = r.password || generateTeacherPassword()
+          await db.teacherAccount.create({
+            data: {
+              firstName: r.firstName,
+              lastName: r.lastName,
+              email,
+              passwordHash: await hashPin(finalPassword),
+            },
+          })
+          created += 1
+          createdPasswords.push({
+            line: lineNo,
+            firstName: r.firstName,
+            lastName: r.lastName,
+            email,
+            password: finalPassword,
+          })
+        }
+        return NextResponse.json({ ok: true, created, total: parsed.rows.length, problems, accounts: createdPasswords })
+      }
+
+      case 'set_email_domain': {
+        const domain = typeof body?.domain === 'string' ? body.domain.trim().toLowerCase() : ''
+        if (!/^@[a-z0-9.-]+\.[a-z]{2,}$/.test(domain) || domain.length > 120) {
+          return NextResponse.json(
+            { error: 'Domaine invalide — attendu : @etablissement.tn (commence par @, nom de domaine complet).' },
+            { status: 400 }
+          )
+        }
+        await db.adminSetting.update({ where: { id: 'singleton' }, data: { teacherEmailDomain: domain } })
+        return NextResponse.json({ ok: true, domain })
+      }
+
+      // ===== ESPACE APPARENCE (v3.0.0) =====
+
+      case 'set_theme': {
+        const theme = sanitizeTheme(body?.theme)
+        if (!theme) {
+          return NextResponse.json(
+            { error: 'Thème invalide : couleurs au format #rrvvbb (le fond doit rester clair).' },
+            { status: 400 }
+          )
+        }
+        await db.adminSetting.update({
+          where: { id: 'singleton' },
+          data: { theme: JSON.stringify(theme) },
+        })
+        return NextResponse.json({ ok: true, theme })
+      }
+
+      case 'reset_theme': {
+        await db.adminSetting.update({ where: { id: 'singleton' }, data: { theme: '{}' } })
+        return NextResponse.json({ ok: true })
+      }
+
       default:
         return NextResponse.json({ error: 'Action inconnue.' }, { status: 400 })
     }
@@ -482,6 +809,57 @@ async function findSession(codeRaw: unknown) {
 
 function notFound() {
   return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
+}
+
+// ---------------- Helpers v3.0.0 ----------------
+
+/** Liste de codes de séances valides (6 caractères). */
+function readCodes(raw: unknown): string[] {
+  return Array.isArray(raw)
+    ? (raw as unknown[]).filter((c): c is string => typeof c === 'string' && c.length === 6)
+    : []
+}
+
+/** Noms + email d'un compte (normalisés). */
+function readAccountNames(body: AdminAction): { firstName: string; lastName: string; email: string } {
+  return {
+    firstName: typeof body?.firstName === 'string' ? body.firstName.trim() : '',
+    lastName: typeof body?.lastName === 'string' ? body.lastName.trim() : '',
+    email: normalizeTeacherEmail(body?.email),
+  }
+}
+
+/** Validation d'un compte avant création. Retourne null si OK. */
+function validateNewAccount(
+  firstName: string,
+  lastName: string,
+  email: string,
+  password: string,
+  domain: string
+): string | null {
+  if (firstName.length < 2 || firstName.length > 60) {
+    return 'Le prénom doit contenir entre 2 et 60 caractères.'
+  }
+  if (lastName.length < 2 || lastName.length > 60) {
+    return 'Le nom doit contenir entre 2 et 60 caractères.'
+  }
+  if (!isPlausibleEmail(email)) {
+    return 'Email invalide (attendu : prenom.nom@etablissement).'
+  }
+  const domainErr = checkEmailDomain(email, domain)
+  if (domainErr) return domainErr
+  if (password && (password.length < 8 || password.length > 64)) {
+    return 'Le mot de passe doit contenir entre 8 et 64 caractères (ou laisser vide pour en générer un).'
+  }
+  return null
+}
+
+/** Décode une chaîne base64 en octets (repli latin1 sur caractères étrangers). */
+function base64ToBytes(b64: string): Uint8Array {
+  const clean = b64.replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '')
+  const buf = Buffer.from(clean, 'base64')
+  if (buf.length === 0) throw new Error('empty')
+  return new Uint8Array(buf)
 }
 
 async function issueSessionCookie(req: NextRequest) {

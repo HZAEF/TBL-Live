@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withMetrics } from '@/lib/metrics'
 import { db } from '@/lib/db'
 import { bumpRevisions } from '@/lib/revision'
 import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
@@ -8,7 +9,7 @@ import { computeRevealedAppQuestionIds } from '@/lib/tbl-types'
 // être modifiée jusqu'à ce que la question soit révélée — c'est-à-dire
 // dès que TOUTES les équipes actives y ont répondu, ou si l'enseignant
 // force la révélation.
-export async function POST(req: NextRequest) {
+async function doPOST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
     const token = body?.token
@@ -138,3 +139,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erreur serveur inattendue.' }, { status: 500 })
   }
 }
+
+export const POST = withMetrics<unknown>(
+  'app-answer',
+  doPOST
+)

@@ -71,8 +71,10 @@ export async function POST(req: NextRequest) {
         where: { id: student.id },
         data: { saiCompletedAt: new Date(), saiComment: comment || null },
       })
-      // v2.9.0 : complétion sans réponses (séance antérieure) → compteurs + 1.
-      await bumpRevisions(student.sessionId)
+      // v3.0.0 : complétion visible par l'enseignant seulement
+      // (l'étudiant voit sa confirmation localement) → compteur
+      // enseignant seul.
+      await bumpRevisions(student.sessionId, { student: false })
       return NextResponse.json({ ok: true })
     }
 
@@ -125,7 +127,10 @@ export async function POST(req: NextRequest) {
 
     // v2.9.0 : questionnaire soumis (note finale et rang débloqués pour
     // cet étudiant) → compteurs + 1.
-    await bumpRevisions(student.sessionId)
+    // v3.0.0 : idem — le questionnaire terminé change le tableau de
+    // bord (statistiques) mais rien de visible pour les autres
+    // étudiants → compteur enseignant seul.
+    await bumpRevisions(student.sessionId, { student: false })
 
     return NextResponse.json({ ok: true })
   } catch (e) {

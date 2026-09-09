@@ -3,8 +3,15 @@ import { db } from '@/lib/db'
 import { getSessionByCode, normalizePin, PIN_MAX_ATTEMPTS, PIN_LOCK_MINUTES } from '@/lib/tbl'
 import { verifyPin, migratePinToHash } from '@/lib/pin'
 import { applyLifecycle } from '@/lib/session-lifecycle'
+import { requireTeacher } from '@/lib/teacher-auth'
 
 // POST /api/sessions/[code]/teacher — connexion enseignant (PIN)
+//
+// v3.0.0 : la reprise exige D'ABORD un compte enseignant connecté
+// (email institutionnel + mot de passe, créé par l'administrateur) :
+// plus personne ne peut ouvrir le tableau de bord d'une séance sans
+// compte, même en connaissant le code affiché au tableau. Le PIN reste
+// le secret PROPRE à la séance (double verrou) : code + compte + PIN.
 //
 // Anti force-brute : le code de la séance est public (affiché au tableau),
 // mais le PIN ne peut PAS être deviné en essayant toutes les combinaisons :
@@ -16,6 +23,17 @@ export async function POST(
   { params }: { params: Promise<{ code: string }> }
 ) {
   try {
+    // v3.0.0 — Verrou n°1 : compte enseignant connecté.
+    const auth = await requireTeacher(req)
+    if (!auth.ok) {
+      return NextResponse.json(
+        {
+          error:
+            'Connexion enseignant requise : connectez-vous avec votre email institutionnel et votre mot de passe avant de reprendre une séance.',
+        },
+        { status: 401 }
+      )
+    }
     const { code } = await params
     const body = await req.json().catch(() => null)
     const pin = body?.pin

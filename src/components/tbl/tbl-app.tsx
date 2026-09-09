@@ -23,10 +23,20 @@ import {
 } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 import { initLangFromStorage, useI18n } from '@/lib/i18n'
-import { loadAppConfig } from '@/lib/app-config'
+import { getTheme, loadAppConfig } from '@/lib/app-config'
+import { ICONS } from '@/lib/theme-client'
 import { LangPicker } from './lang-picker'
 
 type Role = 'home' | 'teacher' | 'student'
+
+// v3.0.0 — icônes personnalisables (Apparence de /admin) : références
+// de niveau module (identités stables, aucun composant créé au rendu).
+// v3.0.0 — table complète des icônes personnalisables (Apparence) :
+// le nom choisi par l'administrateur est résolu ici, avec repli sur
+// l'icône d'origine.
+const LOGO_ICONS = ICONS
+const TEACHER_ICONS = ICONS
+const STUDENT_ICONS = ICONS
 
 // Libellés français = clés de traduction (traduits au rendu)
 const TBL_STEPS = [
@@ -70,6 +80,8 @@ const TBL_STEPS = [
 export function TblApp() {
   const [role, setRole] = useState<Role>('home')
   const { t } = useI18n()
+  // v3.0.0 — icônes personnalisées par l'administrateur (Apparence).
+  const [themeReady, setThemeReady] = useState(false)
 
   // Restaure la langue choisie (après hydratation → aucun décalage)
   useEffect(() => {
@@ -80,8 +92,11 @@ export function TblApp() {
   // minuscule au démarrage) : délai de synchronisation + textes
   // personnalisés par l'administrateur (/admin). En cas d'échec
   // (hors ligne, base indisponible), les réglages d'origine s'appliquent.
+  // v3.0.0 — le thème (couleurs + icônes) arrive avec : les couleurs
+  // sont posées en variables CSS (toute l'application suit), les
+  // icônes de l'accueil sont relues ici.
   useEffect(() => {
-    loadAppConfig()
+    void loadAppConfig().then(() => setThemeReady(true))
   }, [])
 
   return (
@@ -90,7 +105,7 @@ export function TblApp() {
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between gap-2 px-4">
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
-              <GraduationCap className="h-5 w-5" />
+              <HeaderLogo ready={themeReady} />
             </div>
             <div className="min-w-0">
               <p className="text-[15px] font-bold leading-none tracking-tight text-stone-900">
@@ -208,7 +223,7 @@ function HomeView({ onSelect }: { onSelect: (r: Role) => void }) {
           )}
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
-            <GraduationCap className="h-6 w-6" />
+            <CardIcon kind="teacher" />
           </span>
           <span>
             <span className="block text-lg font-bold text-stone-900">
@@ -230,7 +245,7 @@ function HomeView({ onSelect }: { onSelect: (r: Role) => void }) {
           )}
         >
           <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-            <Users className="h-6 w-6" />
+            <CardIcon kind="student" />
           </span>
           <span>
             <span className="block text-lg font-bold text-stone-900">
@@ -300,4 +315,24 @@ function HomeView({ onSelect }: { onSelect: (r: Role) => void }) {
       </Collapsible>
     </div>
   )
+}
+
+// v3.0.0 — icônes pilotées par le thème administrateur (références
+// stables de niveau module : GraduationCap / Users par défaut).
+function HeaderLogo({ ready }: { ready: boolean }) {
+  const name = ready ? getTheme().icons?.logo : undefined
+  const Icon = (name && LOGO_ICONS[name]) || GraduationCap
+  return <Icon className="h-5 w-5" />
+}
+
+function CardIcon({ kind }: { kind: 'teacher' | 'student' }) {
+  const theme = getTheme()
+  if (kind === 'teacher') {
+    const name = theme.icons?.teacher
+    const Icon = (name && TEACHER_ICONS[name]) || GraduationCap
+    return <Icon className="h-6 w-6" />
+  }
+  const name = theme.icons?.student
+  const Icon = (name && STUDENT_ICONS[name]) || Users
+  return <Icon className="h-6 w-6" />
 }

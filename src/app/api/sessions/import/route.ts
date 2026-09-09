@@ -4,6 +4,7 @@ import { hashPin, verifyPin } from '@/lib/pin'
 import { normalizePin, isValidPin, PIN_MAX_ATTEMPTS, PIN_LOCK_MINUTES } from '@/lib/tbl'
 import { replaceSessionFromBackup, type SyncBackup } from '@/lib/sync'
 import { bumpRevisions } from '@/lib/revision'
+import { requireTeacher } from '@/lib/teacher-auth'
 
 // POST /api/sessions/import — recrée (ou restaure) une séance à partir
 // d'un fichier de sauvegarde, pour la déployer sur n'importe quel
@@ -11,17 +12,19 @@ import { bumpRevisions } from '@/lib/revision'
 //
 // Deux formats :
 //  - v2 « synchronisation » (jetons + PIN inclus, échangé entre
-//    serveurs) : la séance est recréée À L'IDENTIQUE — mêmes jetons,
-//    le PIN d'origine reste valable. Si la séance existe déjà ici,
-//    le jeton du fichier doit correspondre (protection anti-détour-
-//    nement : personne ne peut écraser une séance existante sans en
-//    posséder le jeton enseignant).
-//  - v1 « sauvegarde téléchargée » (bouton Sauvegarder, sans
-//    secrets) : l'enseignant fournit un NOUVEAU code PIN ; les
-//    étudiants retrouvent leurs comptes avec leur nom + code
-//    personnel. Si la séance existe déjà ici (restauration), le PIN
-//    fourni doit correspondre au PIN existant (5 tentatives →
-//    verrouillage 15 minutes, comme la connexion enseignant).
+//    SERVEURS — cycle local ↔ en ligne) : la séance est recréée À
+//    L'IDENTIQUE — mêmes jetons, le PIN d'origine reste valable. Ce
+//    format ne transite JAMAIS par un navigateur : il est protégé par
+//    le jeton enseignant de la séance, aucune connexion de compte
+//    n'est exigée (la machine locale n'a pas de cookie).
+//  - v1 « sauvegarde téléchargée » (bouton Sauvegarder, sans secrets,
+//    envoyée depuis le NAVIGATEUR de l'enseignant) : v3.0.0 exige un
+//    COMPTE ENSEIGNANT connecté (comme la création) ; l'enseignant
+//    fournit un NOUVEAU code PIN, les étudiants retrouvent leurs
+//    comptes avec leur nom + code personnel. Si la séance existe déjà
+//    ici (restauration), le PIN fourni doit correspondre au PIN
+//    existant (5 tentatives → verrouillage 15 minutes, comme la
+//    connexion enseignant).
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
@@ -45,6 +48,25 @@ export async function POST(req: NextRequest) {
       typeof b.secrets?.teacherToken === 'string' &&
       b.secrets.teacherToken.length >= 32 &&
       typeof b.secrets?.teacherPin === 'string'
+
+    // v3.0.0 — Format v1 depuis un navigateur : compte enseignant exigé
+    // (le format v2 reste machine ↔ machine : pas de cookie, le jeton
+    // de la séance protège déjà l'opération). Le compte devient le
+    // propriétaire de la séance téléversée sur cet appareil.
+    let teacherId: string | null = null
+    if (!isV2) {
+      const auth = await requireTeacher(req)
+      if (!auth.ok) {
+        return NextResponse.json(
+          {
+            error:
+              'Connexion enseignant requise : connectez-vous avec votre email institutionnel avant de téléverser une séance.',
+          },
+          { status: 401 }
+        )
+      }
+      teacherId = auth.teacher.id
+    }
 
     // --- Séance déjà présente sur CET appareil ? ---
     const existing = await db.session.findUnique({ where: { code } })
@@ -113,7 +135,7 @@ export async function POST(req: NextRequest) {
     }
 
     const hashedPin = isV2 ? undefined : await hashPin(pin)
-    const { session } = await replaceSessionFromBackup(backup, hashedPin)
+    const { session } = await replaceSessionFromBackup(backup, hashedPin, teacherId)
 
     // v2.9.0 — La séance vient d'être recréée : incrément EXPLICITE des
     // compteurs (en plus du +1 inscrit par replaceSessionFromBackup).
@@ -122,12 +144,21 @@ export async function POST(req: NextRequest) {
     // changé » par collision de numéros.
     await bumpRevisions(session.id)
 
+    // v3.0.0 — compteurs renvoyés au cycle de synchronisation (tirage
+    // allégé : la version locale mémorise ces numéros pour ne pas
+    // re-tirer tout l'état si rien n'a bougé depuis son push).
+    const fresh = await db.session.findUnique({
+      where: { id: session.id },
+      select: { revision: true, revisionTeacher: true },
+    })
     return NextResponse.json({
       ok: true,
       restored: !!existing,
       code: session.code,
       title: session.title,
       status: session.status,
+      revision: fresh?.revision ?? 0,
+      revisionTeacher: fresh?.revisionTeacher ?? 0,
     })
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Erreur serveur inattendue.'
