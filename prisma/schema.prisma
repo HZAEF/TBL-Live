@@ -75,6 +75,14 @@ model Session {
   // des événements n'est plus exécutée — la séance reste légère même
   // avec 150 étudiants. Colonne additive, défaut false (désactivé).
   reportsEnabled Boolean  @default(false)
+  // v3.1.0 — Journal d'événements (préparation de la synchronisation
+  // delta hybride) : numéro du DERNIER événement consigné pour la
+  // séance. Chaque mutation importante (réponse, join, changement de
+  // phase, révélation…) ajoute UNE ligne SessionEvent numérotée —
+  // un futur sync pourra demander « les événements après le curseur N »
+  // au lieu de transporter le snapshot complet. Colonne additive,
+  // défaut 0 (les séances existantes démarrent simplement à zéro).
+  eventSeq       Int      @default(0)
   createdAt     DateTime @default(now())
 
   teams    Team[]
@@ -85,6 +93,62 @@ model Session {
   peerEvals PeerEval[]
   // v2.6.0 : questionnaire de fin de séance (TBL-SAI) propre à la séance
   saiItems  SaiItem[]
+  // v3.1.0 : journal d'événements (synchronisation delta future)
+  events   SessionEvent[]
+}
+
+// ============================================================
+// v3.1.0 — Journal d'événements d'une séance
+//
+// PRÉPARATION de la synchronisation delta « hybride » : chaque
+// mutation importante ajoute UNE ligne numérotée (sequence monotone
+// propre à la séance, attribuée sous le verrou d'écriture → jamais
+// deux événements avec le même numéro). Un futur mécanisme de
+// synchronisation pourra demander « donne-moi les événements après
+// le curseur X » (action export_events) au lieu de transporter le
+// snapshot complet — le snapshot reste nécessaire pour le backup,
+// la restauration et l'amorçage d'une nouvelle instance.
+//
+// RÈGLES :
+//  - INSERT-ONLY : on n'écrit JAMAIS de mise à jour ni de suppression
+//    (une correction apparaît comme un NOUVEL événement) ;
+//  - AUCUN SECRET dans payload (jamais de jeton, de PIN, de code de
+//    reprise, de mot de passe — uniquement des identifiants techniques
+//    et des valeurs de réponse) ;
+//  - origin : instance qui a produit l'événement ('local' | 'online'),
+//    pour diagnostiquer les allers-retours de la fusion hybride ;
+//  - volume négligeable : ~1 ligne par mutation étudiante (quelques
+//    dizaines d'octets), écrite DANS le verrou d'écriture de la
+//    séance → zéro contention supplémentaire.
+// ============================================================
+model SessionEvent {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  // Numéro monotone propre à la séance (1, 2, 3…). Attribué en
+  // incrémentant Session.eventSeq SOUS le verrou d'écriture : deux
+  // écritures simultanées ne peuvent pas produire le même numéro.
+  sequence  Int
+  // 'join' | 'answer' | 'team_answer' | 'app_answer' | 'appeal' |
+  // 'appeal_done' | 'peer' | 'sai' | 'phase' | 'case_open' | 'reveal'
+  // | 'finish' | 'appeal_decision'
+  type      String
+  // Identifiant de l'entité concernée (id de la question, de l'étudiant,
+  // de l'équipe, du cas…) — null pour les événements de séance entière.
+  entityId  String?
+  // JSON minimal SANS secret (choix, tentative, phase, textes courts).
+  payload   String   @default("{}")
+  // Instance émettrice : 'local' (le PC de l'enseignant) ou 'online'
+  // (Vercel). Renseigné depuis l'en-tête x-tbl-origin du POST (si
+  // absent : 'local' — le serveur qui traite est l'origine).
+  origin    String   @default("local")
+  createdAt DateTime @default(now())
+
+  // Un numéro par séance, et un seul : garanti même si deux requêtes
+  // concurrentes arrivaient à lire le même eventSeq (sécurité
+  // secondaire, le verrou applicatif tient déjà le terrain).
+  @@unique([sessionId, sequence])
+  @@index([sessionId, createdAt])
 }
 
 // ============================================================
