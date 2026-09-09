@@ -18,6 +18,22 @@ import { isTrashExpired } from '@/lib/session-lifecycle'
 import { SAI_SUBSCALES, DEFAULT_SAI_ITEMS } from '@/lib/sai'
 import { buildSyncBackup, syncNow, normalizeRemoteUrl, SyncError } from '@/lib/sync'
 import { bumpRevisions } from '@/lib/revision'
+import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
+
+/** v3.1.0 — Valide le JSON stocké d'un payload d'événement (jamais
+ *  de secret dedans par construction) ; '{}' si illisible. */
+function safeEventPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // JSON illisible : payload vide
+  }
+  return {}
+}
+
 // Renumérote les questions « libres » d'une phase (rat ou application,
 // sans cas associé) : 0, 1, 2, … Garantit un ordre stable et sans doublons
 // après une suppression ou un changement de phase.
@@ -196,24 +212,135 @@ export async function POST(
       )
     }
 
+    // ------------------------------------------------------------
+    // v3.1.0 — MACHINE À ÉTATS : commandes enseignant IDEMPOTENTES.
+    //
+    // Principe (problème n°4 de l'audit) : rejouer une commande ne doit
+    // rien changer, et une commande périmée ne doit pas écraser l'état
+    // courant. Trois gardes AVANT le verrou d'écriture :
+    //  1. IDEMPOTENCE — re-cliquer la phase DÉJÀ active ne relance plus
+    //     le minuteur (l'ancien code remettait phaseStartedAt à zéro à
+    //     chaque double-clic — les étudiants perdaient du temps) ;
+    //     « Lancer le feedback » déjà lancé → rien à faire ; « Tout
+    //     révéler » déjà révélé → rien à faire ;
+    //  2. expectedPhase — le client peut accompagner set_phase de la
+    //     phase QU'IL CONNAÎT : si la séance a avancé entre-temps
+    //     (autre onglet, autre appareil, requête lente), la requête
+    //     périmée est REFUSÉE (409) au lieu d'écraser l'état — le
+    //     tableau de bord se resynchronise de lui-même (2,5 s) ;
+    //  3. Les transitions restent LIBRES (l'enseignant peut revenir en
+    //     arrière volontairement — un déroulé TBL se pilote), mais
+    //     jamais PAR ACCIDENT.
+    // ------------------------------------------------------------
+    if (action === 'set_phase') {
+      const phase = body.phase as string
+      const expectedPhase = typeof body.expectedPhase === 'string' ? body.expectedPhase : null
+      if (phase === session.status) {
+        // v3.1.0 — REJEU AVEUGLE vs RE-ENTRÉE DÉLIBÉRÉE :
+        //  - SANS expectedPhase (double-clic réseau, requête dupliquée) :
+        //    NO-OP — le minuteur n'est pas relancé, rien ne bouge ;
+        //  - AVEC expectedPhase === phase courante (l'enseignant SAIT
+        //    qu'il est déjà dans cette phase et la rejoue exprès) :
+        //    réarmement COMPLET v2.7 — feedbackReady repassé à false
+        //    (re-cacher les résultats), réclamations/appels remis à
+        //    zéro, cas refermés. C'est une commande délibérée, pas un
+        //    accident : le tableau de bord envoie toujours expectedPhase.
+        if (expectedPhase !== session.status) {
+          return NextResponse.json({ ok: true, unchanged: true })
+        }
+      } else if (expectedPhase && expectedPhase !== session.status) {
+        return NextResponse.json(
+          {
+            error:
+              'La séance a changé de phase entre-temps (autre appareil ou requête lente). L\u2019action a été annulée, l\u2019affichage se resynchronise.',
+            currentPhase: session.status,
+            stale: true,
+          },
+          { status: 409 }
+        )
+      }
+    }
+    if (action === 'launch_feedback') {
+      if (session.status === 'feedback' && session.feedbackReady) {
+        return NextResponse.json({ ok: true, unchanged: true })
+      }
+    }
+    if (action === 'toggle_reveal' && Boolean(body.revealed) === session.revealed) {
+      return NextResponse.json({ ok: true, unchanged: true })
+    }
+
     // v2.9.0 — EXTRACTION : le commutateur des actions vit désormais dans
     // runManageAction (ci-dessous) — POST garde l'authentification ET les
     // compteurs de révision du sondage allégé.
-    const res = await runManageAction(session, body as Record<string, unknown>, action)
+    //
+    // v3.1.0 — VERROU D'ÉCRITURE : les actions qui MODIFIENT la séance
+    // passent par la file (une à la fois par séance — un double-clic ne
+    // crée plus de course, les renommages/éditions d'un même objet ne
+    // s'écrasent plus mutuellement). Les actions de LECTURE pure et la
+    // synchronisation (appels réseau de plusieurs secondes) restent
+    // HORS file pour ne jamais bloquer les réponses des étudiants.
+    const READ_ONLY_ACTIONS = new Set([
+      'export_sync',
+      'export_backup',
+      'sync_now',
+      'export_events',
+    ])
+    const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
+    let res: NextResponse
+    if (READ_ONLY_ACTIONS.has(action)) {
+      res = await runManageAction(session, body as Record<string, unknown>, action)
+    } else {
+      res = await withSessionWrite(session.id, 'manage', async () => {
+        const r = await runManageAction(session, body as Record<string, unknown>, action)
+        // v2.9.0 — Sondage allégé : toute action qui MODIFIE la séance
+        // incrémente les compteurs (étudiants + tableau de bord renouvellent
+        // leur état au prochain sondage). Sont exclues les actions de pure
+        // lecture (exports) et la synchronisation (la fusion gère elle-même
+        // ses compteurs). Un échec d'action (4xx/5xx) ne compte pas.
+        if (r.status >= 200 && r.status < 300 && action !== 'sync_now') {
+          await bumpRevisions(session.id)
+        }
+        return r
+      })
+    }
 
-    // v2.9.0 — Sondage allégé : toute action qui MODIFIE la séance
-    // incrémente les compteurs (étudiants + tableau de bord renouvellent
-    // leur état au prochain sondage). Sont exclues les actions de pure
-    // lecture (exports) et la synchronisation (la fusion gère elle-même
-    // ses compteurs). Un échec d'action (4xx/5xx) ne compte pas.
-    if (
-      res.status >= 200 &&
-      res.status < 300 &&
-      action !== 'export_sync' &&
-      action !== 'export_backup' &&
-      action !== 'sync_now'
-    ) {
-      await bumpRevisions(session.id)
+    // v3.1.0 — Journal d'événements pour les transitions clés (sync
+    // delta future) : changements de phase, ouverture de cas,
+    // révélation forcée, décision sur réclamation.
+    if (res.status >= 200 && res.status < 300) {
+      if (action === 'set_phase') {
+        const phase = body.phase as string
+        if (phase !== session.status) {
+          await recordSessionEvent(
+            session.id,
+            'phase',
+            null,
+            { from: session.status, to: phase },
+            origin
+          )
+        }
+      } else if (action === 'open_case') {
+        const caseId = typeof body.caseId === 'string' ? body.caseId : null
+        if (caseId) {
+          await recordSessionEvent(session.id, 'case_open', caseId, {}, origin)
+        }
+      } else if (action === 'toggle_reveal' && Boolean(body.revealed)) {
+        await recordSessionEvent(
+          session.id,
+          'reveal',
+          null,
+          { forced: true },
+          origin
+        )
+      } else if (action === 'resolve_appeal') {
+        await recordSessionEvent(
+          session.id,
+          'appeal_decision',
+          typeof body.id === 'string' ? body.id : null,
+          { status: body.status },
+          origin
+        )
+      }
     }
     return res
   } catch (e) {
@@ -1151,6 +1278,52 @@ async function runManageAction(
           })
         }
         return NextResponse.json(await buildSyncBackup(session))
+      }
+
+      // v3.1.0 — JOURNAL D'ÉVÉNEMENTS EN DELTA (préparation du problème
+      // n°8) : « donne-moi les événements après le curseur X » — la
+      // future synchronisation hybride pourra récupérer SEULEMENT ce
+      // qui a bougé depuis sa dernière visite, au lieu de transporter
+      // le snapshot complet. Lecture pure (aucune écriture, aucun
+      // compteur incrémenté), protégée par le jeton enseignant.
+      // Les événements ne contiennent JAMAIS de secret (voir
+      // recordSessionEvent) — un jeton volé reste nécessaire pour y
+      // accéder, comme pour tout le tableau de bord.
+      case 'export_events': {
+        const after =
+          typeof body.after === 'number' && Number.isInteger(body.after) && body.after >= 0
+            ? body.after
+            : 0
+        const limit = Math.min(
+          2000,
+          typeof body.limit === 'number' && Number.isInteger(body.limit) && body.limit > 0
+            ? body.limit
+            : 500
+        )
+        const [events, fresh] = await Promise.all([
+          db.sessionEvent.findMany({
+            where: { sessionId: session.id, sequence: { gt: after } },
+            orderBy: { sequence: 'asc' },
+            take: limit,
+          }),
+          db.session.findUnique({
+            where: { id: session.id },
+            select: { eventSeq: true },
+          }),
+        ])
+        return NextResponse.json({
+          events: events.map((ev) => ({
+            sequence: ev.sequence,
+            type: ev.type,
+            entityId: ev.entityId,
+            payload: safeEventPayload(ev.payload),
+            origin: ev.origin,
+            createdAt: ev.createdAt.toISOString(),
+          })),
+          cursor: events.length > 0 ? events[events.length - 1].sequence : after,
+          latest: fresh?.eventSeq ?? after,
+          truncated: events.length === limit,
+        })
       }
 
       // v2.7.0 — Synchronisation complète avec la version en ligne :

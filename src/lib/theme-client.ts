@@ -59,6 +59,17 @@ export function themeIcon(kind: ThemeIconKind, name?: string): LucideIcon {
   return fallback
 }
 
+/** v3.1.0 — Data URL de l'icône TÉLÉVERSÉE pour un emplacement (null =
+ *  aucune → utiliser l'icône lucide du thème ou celle d'origine). */
+export function customIconUrl(
+  kind: ThemeIconKind,
+  theme?: { customIcons?: Partial<Record<ThemeIconKind, string>> }
+): string | null {
+  const url = theme?.customIcons?.[kind]
+  if (typeof url === 'string' && url.startsWith('data:image/')) return url
+  return null
+}
+
 let applied = false
 
 /** Applique (ou retire) le thème sur la page courante. */

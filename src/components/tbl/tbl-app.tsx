@@ -24,7 +24,7 @@ import {
 import { cn } from '@/lib/utils'
 import { initLangFromStorage, useI18n } from '@/lib/i18n'
 import { getTheme, loadAppConfig } from '@/lib/app-config'
-import { ICONS } from '@/lib/theme-client'
+import { ICONS, customIconUrl } from '@/lib/theme-client'
 import { LangPicker } from './lang-picker'
 
 type Role = 'home' | 'teacher' | 'student'
@@ -319,14 +319,23 @@ function HomeView({ onSelect }: { onSelect: (r: Role) => void }) {
 
 // v3.0.0 — icônes pilotées par le thème administrateur (références
 // stables de niveau module : GraduationCap / Users par défaut).
+// v3.1.0 — si l'administrateur a TÉLÉVERSÉ une image pour cet
+// emplacement, elle prime sur l'icône lucide : rendu <img> avec la
+// MÊME classe de taille (l'image est déjà redimensionnée à 128×128
+// côté client → nette sur écrans Retina, quelques Ko).
 function HeaderLogo({ ready }: { ready: boolean }) {
-  const name = ready ? getTheme().icons?.logo : undefined
+  const theme = getTheme()
+  const custom = ready ? customIconUrl('logo', theme) : null
+  if (custom) return <img src={custom} alt="" className="h-5 w-5 object-contain" aria-hidden />
+  const name = ready ? theme.icons?.logo : undefined
   const Icon = (name && LOGO_ICONS[name]) || GraduationCap
   return <Icon className="h-5 w-5" />
 }
 
 function CardIcon({ kind }: { kind: 'teacher' | 'student' }) {
   const theme = getTheme()
+  const custom = customIconUrl(kind, theme)
+  if (custom) return <img src={custom} alt="" className="h-6 w-6 object-contain" aria-hidden />
   if (kind === 'teacher') {
     const name = theme.icons?.teacher
     const Icon = (name && TEACHER_ICONS[name]) || GraduationCap

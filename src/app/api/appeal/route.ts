@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { bumpRevisions } from '@/lib/revision'
+import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
 
 // POST /api/appeal — l'équipe soumet une réclamation (appel) sur une question
 export async function POST(req: NextRequest) {
@@ -53,27 +54,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Question introuvable.' }, { status: 404 })
     }
 
-    const existing = await db.appeal.findFirst({
-      where: { teamId: student.teamId, questionId },
+    // v3.1.0 — VERROU D'ÉCRITURE : le couple « chercher une
+    // réclamation existante → créer/mettre à jour » est atomique.
+    // Idempotence naturelle : un réessai après timeout met à jour la
+    // MÊME ligne (le même texte redonne le même état).
+    const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
+    const teamId = student.teamId as string
+    const outcome = await withSessionWrite(student.sessionId, 'appeal', async () => {
+      const existing = await db.appeal.findFirst({
+        where: { teamId, questionId },
+      })
+      if (existing) {
+        await db.appeal.update({
+          where: { id: existing.id },
+          data: { text, status: 'pending' },
+        })
+      } else {
+        await db.appeal.create({
+          data: {
+            sessionId: student.sessionId,
+            teamId,
+            questionId,
+            text,
+          },
+        })
+      }
+      return { created: !existing } as const
     })
-    if (existing) {
-      await db.appeal.update({
-        where: { id: existing.id },
-        data: { text, status: 'pending' },
-      })
-    } else {
-      await db.appeal.create({
-        data: {
-          sessionId: student.sessionId,
-          teamId: student.teamId,
-          questionId,
-          text,
-        },
-      })
-    }
 
     // v2.9.0 : réclamation soumise → compteurs + 1.
     await bumpRevisions(student.sessionId)
+    if (outcome.created) {
+      await recordSessionEvent(
+        student.sessionId,
+        'appeal',
+        questionId,
+        { teamId },
+        origin
+      )
+    }
 
     return NextResponse.json({ ok: true })
   } catch (e) {

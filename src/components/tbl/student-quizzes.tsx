@@ -5,10 +5,10 @@ import { ArrowRight, Check, Clock, Loader2, Save, Send, Star, Users, X } from 'l
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { api } from '@/lib/tbl-client'
+import { ApiError, api, useSubmitState, type SubmitPhase } from '@/lib/tbl-client'
 import type { QuestionDTO, StudentStateDTO } from '@/lib/tbl-types'
 import { useI18n } from '@/lib/i18n'
-import { ChoiceButton, choiceLetter, Countdown, InfoCard } from './shared'
+import { ChoiceButton, choiceLetter, Countdown, InfoCard, SubmitStatus } from './shared'
 import { useToast } from '@/hooks/use-toast'
 
 type RefreshFn = () => Promise<unknown>
@@ -29,17 +29,30 @@ export function IratQuiz({
   const firstUnanswered = questions.findIndex((q) => !answered.has(q.id))
   const [index, setIndex] = useState(() => Math.max(0, firstUnanswered))
   const [selected, setSelected] = useState<number | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
   const { t } = useI18n()
+  // v3.1.0 — ÉTAT D'ENVOI EXPLICITE (problème n°12) : « Envoi en
+  // cours… » → « Enregistré ✓ » ou « Échec — non enregistré » +
+  // RÉESSAI. La sélection RESTE en cas d'échec : le réessai renvoie
+  // EXACTEMENT la même réponse (idempotent côté serveur : jamais de
+  // doublon, jamais de « déjà répondu » brutal).
+  const submitState = useSubmitState()
+  const submitting = submitState.phase.state === 'sending'
+  const lastChoiceRef = useRef<number | null>(null)
 
   const q = questions[Math.min(index, questions.length - 1)]
   const done = questions.length > 0 && questions.every((x) => answered.has(x.id))
 
-  useEffect(() => {
+  // v3.1.0 — reset de la sélection au changement de question par le
+  // pattern React documenté « ajuster l'état pendant le rendu » (plus
+  // de setState dans un effet — cascades de rendus éliminées). Au
+  // passage, l'état d'envoi est remis à zéro : la confirmation de la
+  // question précédente ne reste pas affichée sous la nouvelle.
+  const [lastQId, setLastQId] = useState<string | null>(q?.id ?? null)
+  if (q && q.id !== lastQId) {
+    setLastQId(q.id)
     setSelected(null)
-    setError('')
-  }, [q?.id])
+    submitState.reset()
+  }
 
   if (questions.length === 0) {
     return (
@@ -68,24 +81,34 @@ export function IratQuiz({
     )
   }
 
-  const submit = async () => {
-    if (selected === null) return
-    setSubmitting(true)
-    setError('')
-    try {
-      await api('/api/answer', {
-        method: 'POST',
-        body: JSON.stringify({ token, questionId: q.id, choice: selected }),
-      })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t('Erreur inconnue.'))
-      return
-    } finally {
-      setSubmitting(false)
-    }
-    setSelected(null)
-    await refresh()
-    setIndex((i) => Math.min(i + 1, questions.length - 1))
+  const submit = async (choiceOverride?: number) => {
+    const choice = choiceOverride ?? selected
+    if (choice === null) return
+    lastChoiceRef.current = choice
+    const result = await submitState.run(
+      () =>
+        api<{ ok: boolean; duplicate: boolean }>('/api/answer', {
+          method: 'POST',
+          body: JSON.stringify({ token, questionId: q.id, choice }),
+        }),
+      {
+        onSaved: async () => {
+          // La sélection est relâchée immédiatement, la confirmation
+          // « Réponse enregistrée ✓ » reste visible ~900 ms PUIS la
+          // question suivante arrive (l'étudiant VOIT que c'est pris —
+          // jamais de doute « c'est enregistré ou pas ? »).
+          setSelected(null)
+          await refresh()
+          setTimeout(() => {
+            setIndex((i) => Math.min(i + 1, questions.length - 1))
+          }, 900)
+        },
+      }
+    )
+    return result
+  }
+  const retry = () => {
+    void submit(lastChoiceRef.current ?? undefined)
   }
 
   return (
@@ -114,11 +137,13 @@ export function IratQuiz({
             />
           ))}
         </div>
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {submitState.phase.state !== 'idle' && (
+          <SubmitStatus phase={submitState.phase} onRetry={retry} />
+        )}
         <Button
           className="mt-5 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
           disabled={selected === null || submitting}
-          onClick={submit}
+          onClick={() => submit()}
         >
           {submitting ? t('Envoi…') : t('Valider ma réponse')}
           <ArrowRight className="ml-2 h-5 w-5 rtl:rotate-180" />
@@ -150,9 +175,18 @@ export function TratQuiz({
 
   const [index, setIndex] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
-  const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<{ correct: boolean; score: number; attempt: number } | null>(null)
   const { t } = useI18n()
+  // v3.1.0 — état d'envoi + RÉESSAI SÛR : le client envoie
+  // expectedAttempt = le nombre de tentatives qu'il a VUES. Après un
+  // timeout, le réessai de la MÊME tentative est reconnu par le serveur
+  // (réponse identique renvoyée) ; si un coéquipier a gratté entre-
+  // temps, le serveur répond syncNeeded → l'écran se rafraîchit au lieu
+  // d'enregistrer une 2ᵉ case (l'équipe ne perd plus de points à cause
+  // du réseau).
+  const submitState = useSubmitState()
+  const submitting = submitState.phase.state === 'sending'
+  const lastChoiceRef = useRef<number | null>(null)
 
   const q = questions[Math.min(index, questions.length - 1)]
   const attempts = useMemo(
@@ -163,10 +197,15 @@ export function TratQuiz({
   const exhausted = attempts.length >= 4 && !found
   const teamScore = data.teamTratAnswers.reduce((s, a) => s + a.score, 0)
 
-  useEffect(() => {
+  // v3.1.0 — reset sélection + feedback au changement de question
+  // (pattern « ajuster l'état pendant le rendu », sans effet).
+  const [lastQId, setLastQId] = useState<string | null>(q?.id ?? null)
+  if (q && q.id !== lastQId) {
+    setLastQId(q.id)
     setSelected(null)
     setFeedback(null)
-  }, [q?.id])
+    submitState.reset()
+  }
 
   if (!team) {
     return (
@@ -185,35 +224,57 @@ export function TratQuiz({
     )
   }
 
-  const submit = async () => {
-    if (selected === null) return
-    setSubmitting(true)
-    try {
-      const res = await api<{ attempt: number; isCorrect: boolean; score: number }>(
-        '/api/team-answer',
-        { method: 'POST', body: JSON.stringify({ token, questionId: q.id, choice: selected }) }
-      )
-      setFeedback({ correct: res.isCorrect, score: res.score, attempt: res.attempt })
-      if (res.isCorrect) {
-        toast({
-          title: t('Bonne réponse ! +{n} point(s)', { n: res.score }),
-          description:
-            res.attempt === 1
-              ? t('Trouvé du premier coup 🎉')
-              : t('Trouvé à la {n}ᵉ tentative.', { n: res.attempt }),
-        })
+  const submit = async (choiceOverride?: number) => {
+    const choice = choiceOverride ?? selected
+    if (choice === null) return
+    lastChoiceRef.current = choice
+    await submitState.run(
+      () =>
+        api<{
+          attempt: number
+          isCorrect: boolean
+          score: number
+          pointsIfCorrect: number
+          duplicate?: boolean
+        }>('/api/team-answer', {
+          method: 'POST',
+          body: JSON.stringify({
+            token,
+            questionId: q.id,
+            choice,
+            // v3.1.0 — tentatives connues du client (garde-fou anti-
+            // double-grattage après timeout / clic concurrent d'un
+            // coéquipier) ; le serveur renvoie l'état réel sinon.
+            expectedAttempt: attempts.length,
+          }),
+        }),
+      {
+        onSaved: async (res) => {
+          setFeedback({ correct: res.isCorrect, score: res.score, attempt: res.attempt })
+          if (res.isCorrect) {
+            toast({
+              title: t('Bonne réponse ! +{n} point(s)', { n: res.score }),
+              description:
+                res.attempt === 1
+                  ? t('Trouvé du premier coup 🎉')
+                  : t('Trouvé à la {n}ᵉ tentative.', { n: res.attempt }),
+            })
+          }
+          await refresh()
+        },
       }
-      await refresh()
-    } catch (e) {
-      toast({
-        title: t('Impossible d’envoyer'),
-        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-        variant: 'destructive',
-      })
-    } finally {
-      setSubmitting(false)
-      setSelected(null)
+    )
+    setSelected(null)
+  }
+  const retry = () => {
+    // syncNeeded : un coéquipier a déjà gratté cette case — on rafraîchit
+    // l'état au lieu de renvoyer (l'écran se met à jour tout seul).
+    if (submitState.phase.state === 'failed' && submitState.phase.syncNeeded) {
+      void refresh()
+      submitState.reset()
+      return
     }
+    void submit(lastChoiceRef.current ?? undefined)
   }
 
   const statuses = questions.map((x) => {
@@ -320,6 +381,10 @@ export function TratQuiz({
           </p>
         )}
 
+        {submitState.phase.state !== 'idle' && (
+          <SubmitStatus phase={submitState.phase} onRetry={retry} />
+        )}
+
         {allDone ? (
           // v2.5.1 : en fin d'épreuve, le bouton confirme la fin au lieu
           // de proposer une « Question suivante » inexistante.
@@ -335,7 +400,7 @@ export function TratQuiz({
           <Button
             className="mt-5 h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
             disabled={selected === null || submitting || exhausted}
-            onClick={submit}
+            onClick={() => submit()}
           >
             {submitting
               ? t('Envoi…')
@@ -376,9 +441,21 @@ export function AppealView({
 }) {
   const { toast } = useToast()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [submitting, setSubmitting] = useState<string | null>(null)
-  const [sendingDone, setSendingDone] = useState(false)
   const { t } = useI18n()
+  // v3.1.0 — états d'envoi explicites : réclamation (par question) et
+  // bouton « pas de réclamation ». En cas d'échec : message + RÉESSAI
+  // (l'upsert serveur est idempotent : renvoyer le même texte ne crée
+  // jamais de doublon).
+  const appealSubmit = useSubmitState()
+  const doneSubmit = useSubmitState()
+  // v3.1.0 — Question concernée par l'envoi en cours / échoué : en STATE
+  // (lue pendant le rendu pour afficher l'état de LA question envoyée —
+  // une ref ne doit jamais être lue au rendu, règle react-hooks/refs).
+  const [appealQ, setAppealQ] = useState<string | null>(null)
+  // État (true/false) du dernier « pas de réclamation » — sert au réessai.
+  const doneStateRef = useRef(true)
+  const submitting = appealSubmit.phase.state === 'sending' ? appealQ : null
+  const sendingDone = doneSubmit.phase.state === 'sending'
   const appealByQuestion = new Map(data.myAppeals.map((a) => [a.questionId, a]))
   const myTeamDone = data.myTeamAppealsDone ?? false
   const progress = data.appealsProgress
@@ -391,8 +468,8 @@ export function AppealView({
     )
   }
 
-  const submit = async (questionId: string) => {
-    const text = (drafts[questionId] ?? '').trim()
+  const submit = async (questionId: string, textOverride?: string) => {
+    const text = (textOverride ?? drafts[questionId] ?? '').trim()
     if (text.length < 10) {
       toast({
         title: t('Justification trop courte'),
@@ -403,56 +480,54 @@ export function AppealView({
       })
       return
     }
-    setSubmitting(questionId)
-    try {
-      await api('/api/appeal', {
+    setAppealQ(questionId)
+    const result = await appealSubmit.run(() => 
+      api<{ ok: boolean }>('/api/appeal', {
         method: 'POST',
         body: JSON.stringify({ token, questionId, text }),
       })
+    )
+    // Succès SEULEMENT : la confirmation « envoyée » n'apparaît qu'après
+    // la réponse du serveur (jamais d'optimisme mensonger).
+    if (result !== null) {
       toast({ title: t('Réclamation envoyée'), description: t('Votre professeur va l’examiner.') })
       await refresh()
-    } catch (e) {
-      toast({
-        title: t('Impossible d’envoyer'),
-        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-        variant: 'destructive',
-      })
-    } finally {
-      setSubmitting(null)
     }
+  }
+  const retryAppeal = () => {
+    if (!appealQ) return
+    void submit(appealQ)
   }
 
   // Bouton « pas de réclamation » : marque l'équipe comme ayant répondu à
   // cette phase. Quand toutes les équipes ont répondu, la séance passe
   // automatiquement au feedback.
-  const markDone = async (done: boolean) => {
-    setSendingDone(true)
-    try {
-      const res = await api<{ advanced: boolean; doneCount: number; total: number }>(
-        '/api/appeal-done',
-        { method: 'POST', body: JSON.stringify({ token, done }) }
-      )
-      if (done) {
-        toast({
-          title: res.advanced ? t('Toutes les équipes ont répondu !') : t('Réponse enregistrée'),
-          description: res.advanced
-            ? t('La séance passe automatiquement à la phase de feedback.')
-            : t('En attente des autres équipes ({d}/{n}).', {
-                d: res.doneCount,
-                n: res.total,
-              }),
-        })
+  const markDone = async (done: boolean, retrying = false) => {
+    if (!retrying) doneStateRef.current = done
+    const effectiveDone = doneStateRef.current
+    await doneSubmit.run(
+      () =>
+        api<{ advanced: boolean; doneCount: number; total: number }>('/api/appeal-done', {
+          method: 'POST',
+          body: JSON.stringify({ token, done: effectiveDone }),
+        }),
+      {
+        onSaved: async (res) => {
+          if (effectiveDone) {
+            toast({
+              title: res.advanced ? t('Toutes les équipes ont répondu !') : t('Réponse enregistrée'),
+              description: res.advanced
+                ? t('La séance passe automatiquement à la phase de feedback.')
+                : t('En attente des autres équipes ({d}/{n}).', {
+                    d: res.doneCount,
+                    n: res.total,
+                  }),
+            })
+          }
+          await refresh()
+        },
       }
-      await refresh()
-    } catch (e) {
-      toast({
-        title: t('Impossible d’envoyer'),
-        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-        variant: 'destructive',
-      })
-    } finally {
-      setSendingDone(false)
-    }
+    )
   }
 
   return (
@@ -492,6 +567,10 @@ export function AppealView({
                 ? t('Nous avons terminé nos réclamations')
                 : t('Nous n’avons pas de réclamation')}
             </Button>
+            <SubmitStatus
+              phase={doneSubmit.phase}
+              onRetry={() => markDone(doneStateRef.current, true)}
+            />
           </>
         ) : (
           <>
@@ -602,6 +681,9 @@ export function AppealView({
               <Send className="mr-2 h-4 w-4" />
               {appeal ? t('Mettre à jour la réclamation') : t('Envoyer la réclamation')}
             </Button>
+            {appealSubmit.phase.state !== 'idle' && appealQ === q.id && (
+              <SubmitStatus phase={appealSubmit.phase} onRetry={retryAppeal} />
+            )}
           </div>
         )
       })}
@@ -678,7 +760,19 @@ export function ApplicationView({
   // v2.7.0 : brouillons des justifications (le texte reste à enregistrer
   // explicitement ; les RÉPONSES, elles, s'enregistrent au clic).
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState<string | null>(null)
+  // v3.1.0 — état d'envoi PAR QUESTION (enregistrement automatique au
+  // clic) : « Envoi… » pendant, « Enregistré ✓ » après confirmation
+  // serveur, « Échec + Réessayer » sinon. L'optimisme visuel reste,
+  // mais le doute disparaît : la confirmation ne s'affiche qu'après la
+  // réponse du serveur.
+  const [sendStates, setSendStates] = useState<Record<string, SubmitPhase>>({})
+  const setSendState = (questionId: string, phase: SubmitPhase) =>
+    setSendStates((prev) => ({ ...prev, [questionId]: phase }))
+  // Dernière intention par question (choix + texte) — sert au RÉESSAI
+  // après échec : on renvoie EXACTEMENT la même chose (upsert
+  // idempotent côté serveur).
+  const lastIntent = useRef<Record<string, { choice: number; text: string }>>({})
+  const saving = Object.entries(sendStates).find(([, p]) => p.state === 'sending')?.[0] ?? null
   // v2.7.0 : affichage immédiat (optimiste) de la réponse choisie — le clic
   // est visible INSTANTANÉMENT, l'enregistrement part en arrière-plan.
   const [optimistic, setOptimistic] = useState<Record<string, number>>({})
@@ -686,26 +780,25 @@ export function ApplicationView({
   // partent DANS l'ORDRE — la dernière réponse est toujours la bonne).
   const chains = useRef<Record<string, Promise<void>>>({})
 
-  // Nettoyage de l'optimisme : quand le serveur confirme la réponse
+  // Nettoyage de l'optimisme (v3.1.0 : DÉRIVÉ au rendu, plus de
+  // setState dans un effet) : quand le serveur confirme la réponse
   // (mine.choice == valeur optimiste), l'optimisme devient inutile.
-  useEffect(() => {
-    setOptimistic((prev) => {
-      let changed = false
-      const next = { ...prev }
-      for (const [qid, choice] of Object.entries(prev)) {
-        const mine = data.teamAppAnswers.find((a) => a.questionId === qid)
-        if (mine && mine.choice === choice) {
-          delete next[qid]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-  }, [data.teamAppAnswers])
+  const shownOptimistic = useMemo(() => {
+    const next: Record<string, number> = {}
+    for (const [qid, choice] of Object.entries(optimistic)) {
+      const mine = data.teamAppAnswers.find((a) => a.questionId === qid)
+      if (!(mine && mine.choice === choice)) next[qid] = choice
+    }
+    return next
+  }, [optimistic, data.teamAppAnswers])
 
-  useEffect(() => {
+  // Reset de l'optimisme au changement de phase (pattern « ajuster
+  // l'état pendant le rendu », sans effet).
+  const [lastStatus, setLastStatus] = useState(data.session.status)
+  if (data.session.status !== lastStatus) {
+    setLastStatus(data.session.status)
     setOptimistic({})
-  }, [data.session.status])
+  }
 
   // v2.8.2 : PLUS DE NAVIGATION — l'enseignant est seul pilote. La page
   // suit automatiquement LE cas lancé (un seul cas ouvert à la fois,
@@ -764,13 +857,28 @@ export function ApplicationView({
   // même question sont chaînés dans l'ordre : la DERNIÈRE réponse
   // envoyée est toujours celle enregistrée.
   const save = (questionId: string, choice: number, text: string) => {
+    lastIntent.current[questionId] = { choice, text }
     const run = async () => {
-      setSaving(questionId)
-      try {
-        const res = await api<{ revealedNow: boolean }>('/api/app-answer', {
-          method: 'POST',
-          body: JSON.stringify({ token, questionId, choice, text }),
+      setSendState(questionId, { state: 'sending', slow: false })
+      // « Connexion lente » au bout de 3 s ( même signal que partout).
+      const slowTimer = setTimeout(() => {
+        setSendStates((prev) => {
+          const p = prev[questionId]
+          return p && p.state === 'sending'
+            ? { ...prev, [questionId]: { state: 'sending', slow: true } }
+            : prev
         })
+      }, 3000)
+      try {
+        const res = await api<{ revealedNow: boolean; duplicate: boolean }>(
+          '/api/app-answer',
+          {
+            method: 'POST',
+            body: JSON.stringify({ token, questionId, choice, text }),
+          }
+        )
+        clearTimeout(slowTimer)
+        setSendState(questionId, { state: 'saved', duplicate: res.duplicate })
         if (res.revealedNow) {
           toast({
             title: t('Toutes les équipes ont répondu !'),
@@ -779,20 +887,30 @@ export function ApplicationView({
         }
         await refresh()
       } catch (e) {
-        toast({
-          title: t('Impossible d’enregistrer'),
-          description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-          variant: 'destructive',
+        clearTimeout(slowTimer)
+        const apiErr = e instanceof ApiError ? e : null
+        setSendState(questionId, {
+          state: 'failed',
+          message: e instanceof Error ? e.message : '',
+          retryable:
+            apiErr === null || apiErr.kind !== 'server' || apiErr.status >= 500 || apiErr.status === 429,
+          kind: apiErr ? apiErr.kind : 'server',
         })
         await refresh()
-      } finally {
-        setSaving(null)
       }
     }
     chains.current[questionId] = (chains.current[questionId] ?? Promise.resolve()).then(
       run,
       run
     )
+  }
+
+  // Réessai d'une question échouée : renvoie EXACTEMENT la dernière
+  // intention (choix + texte) — l'upsert serveur est idempotent.
+  const retrySave = (questionId: string) => {
+    const intent = lastIntent.current[questionId]
+    if (!intent) return
+    save(questionId, intent.choice, intent.text)
   }
 
   // Clic sur une réponse : affichage immédiat + envoi en arrière-plan.
@@ -802,7 +920,6 @@ export function ApplicationView({
     setOptimistic((prev) => ({ ...prev, [questionId]: ci }))
     save(questionId, ci, drafts[questionId] ?? mine?.text ?? '')
   }
-
   return (
     <div className="space-y-4">
       <InfoCard tone="emerald" title={t("Cas cliniques d'application")}>
@@ -852,16 +969,18 @@ export function ApplicationView({
               revealed={revealedIds.has(q.id)}
               progress={progressByQuestion.get(q.id)}
               mine={data.teamAppAnswers.find((a) => a.questionId === q.id)}
-              optimisticChoice={optimistic[q.id]}
+              optimisticChoice={shownOptimistic[q.id]}
               textDraft={drafts[q.id]}
               saving={saving === q.id}
+              sendState={sendStates[q.id]}
               teamName={data.me.team?.name}
               allTeamAppAnswers={data.allTeamAppAnswers ?? []}
               onChoice={(ci) => onChoice(q.id, ci)}
               onTextChange={(v) => setDrafts({ ...drafts, [q.id]: v })}
+              onRetry={() => retrySave(q.id)}
               onSaveText={() => {
                 const mine = data.teamAppAnswers.find((a) => a.questionId === q.id)
-                const choice = optimistic[q.id] ?? mine?.choice ?? 0
+                const choice = shownOptimistic[q.id] ?? mine?.choice ?? 0
                 save(q.id, choice, drafts[q.id] ?? mine?.text ?? '')
               }}
             />
@@ -932,11 +1051,13 @@ function AppQuestionCard({
   optimisticChoice,
   textDraft,
   saving,
+  sendState,
   teamName,
   allTeamAppAnswers,
   onChoice,
   onTextChange,
   onSaveText,
+  onRetry,
 }: {
   q: QuestionDTO
   qi: number
@@ -946,11 +1067,16 @@ function AppQuestionCard({
   optimisticChoice?: number
   textDraft?: string
   saving: boolean
+  /** v3.1.0 — état d'envoi de CETTE question (Envoi…/Enregistré/
+   *  Échec — réessayer) ; l'étudiant ne doute plus jamais de l'état
+   *  de sa réponse d'équipe. */
+  sendState?: SubmitPhase
   teamName?: string
   allTeamAppAnswers: { teamName: string; questionId: string; choice: number; text: string | null }[]
   onChoice: (ci: number) => void
   onTextChange: (v: string) => void
   onSaveText: () => void
+  onRetry: () => void
 }) {
   const { t } = useI18n()
   // v2.7.0 : affichage optimiste — la réponse cliquée s'affiche
@@ -958,6 +1084,11 @@ function AppQuestionCard({
   const sel = optimisticChoice ?? mine?.choice
   const textDirty =
     mine !== undefined && textDraft !== undefined && textDraft !== (mine.text ?? '')
+  // v3.1.0 — l'état d'envoi explicite PRIME sur l'ancien indicateur :
+  // « Enregistrement… » tant que le serveur n'a PAS confirmé, puis
+  // « Enregistrée ✓ » ou « Échec + Réessayer ».
+  const sending = sendState?.state === 'sending'
+  const cardSaving = saving || sending
 
   return (
     <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
@@ -1041,14 +1172,14 @@ function AppQuestionCard({
       ) : (
         <>
           {/* Confirmation de l'enregistrement automatique */}
-          {mine !== undefined && (
+          {mine !== undefined && sendState === undefined && (
             <p
               className={cn(
                 'mt-3 text-center text-xs font-medium',
-                saving ? 'text-stone-400' : 'text-emerald-700'
+                cardSaving ? 'text-stone-400' : 'text-emerald-700'
               )}
             >
-              {saving ? (
+              {cardSaving ? (
                 <>
                   <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
                   {t('Enregistrement…')}
@@ -1067,11 +1198,21 @@ function AppQuestionCard({
               )}
             </p>
           )}
-          {mine === undefined && saving && (
+          {mine === undefined && cardSaving && sendState === undefined && (
             <p className="mt-3 text-center text-xs font-medium text-stone-400">
               <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
               {t('Enregistrement…')}
             </p>
+          )}
+          {/* v3.1.0 — état d'envoi EXPLICITE de cette question : Envoi… /
+              Enregistré ✓ / Échec — Réessayer. Remplace les anciens
+              indicateurs silencieux : plus jamais de doute « c'est
+              enregistré ou pas ? ». */}
+          {sendState && (
+            <SubmitStatus
+              phase={sendState}
+              onRetry={sendState.state === 'failed' ? onRetry : undefined}
+            />
           )}
           {mine === undefined && !saving && progress && progress.total > 1 && (
             <p className="mt-3 text-center text-xs text-stone-500">
@@ -1098,10 +1239,10 @@ function AppQuestionCard({
           {textDirty && (
             <Button
               className="mt-3 h-11 w-full bg-emerald-600 text-base hover:bg-emerald-700"
-              disabled={saving}
+              disabled={cardSaving}
               onClick={onSaveText}
             >
-              {saving ? (
+              {cardSaving ? (
                 t('Envoi…')
               ) : (
                 <>
@@ -1133,8 +1274,11 @@ export function PeerView({
   const teammates = data.teamMembers.filter((m) => m.id !== data.me.id)
   const [scores, setScores] = useState<Record<string, number>>({})
   const [comments, setComments] = useState<Record<string, string>>({})
-  const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  // v3.1.0 — état d'envoi explicite + réessai (l'upsert par (évaluateur,
+  // évalué) est idempotent : renvoyer les mêmes notes ne crée rien).
+  const submitState = useSubmitState()
+  const submitting = submitState.phase.state === 'sending'
 
   useEffect(() => {
     const init: Record<string, number> = {}
@@ -1175,9 +1319,11 @@ export function PeerView({
       })
       return
     }
-    setSubmitting(true)
-    try {
-      await api('/api/peer', {
+    // v3.1.0 — état d'envoi explicite : la confirmation « envoyées »
+    // n'apparaît qu'après la réponse du serveur ; en cas d'échec,
+    // message + RÉESSAI (upsert idempotent par (évaluateur, évalué)).
+    const result = await submitState.run(() =>
+      api<{ ok: boolean }>('/api/peer', {
         method: 'POST',
         body: JSON.stringify({
           token,
@@ -1188,17 +1334,11 @@ export function PeerView({
           })),
         }),
       })
+    )
+    if (result !== null) {
       setSubmitted(true)
       toast({ title: t('Évaluations envoyées'), description: t('Merci pour votre honnêteté !') })
       await refresh()
-    } catch (e) {
-      toast({
-        title: t('Impossible d’envoyer'),
-        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
-        variant: 'destructive',
-      })
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -1247,7 +1387,7 @@ export function PeerView({
       <Button
         className="h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
         disabled={submitting}
-        onClick={submit}
+        onClick={() => submit()}
       >
         {submitting
           ? t('Envoi…')
@@ -1255,7 +1395,10 @@ export function PeerView({
             ? t('Mettre à jour mes évaluations')
             : t('Envoyer mes évaluations')}
       </Button>
-      {submitted && (
+      {submitState.phase.state !== 'idle' && (
+        <SubmitStatus phase={submitState.phase} onRetry={() => submit()} />
+      )}
+      {submitted && submitState.phase.state !== 'failed' && (
         <p className="text-center text-sm font-medium text-emerald-700">
           <Check className="mr-1 inline h-4 w-4" />
           {t('Évaluations enregistrées. Vous pouvez encore les ajuster.')}

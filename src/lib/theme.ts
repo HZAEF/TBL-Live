@@ -30,6 +30,13 @@ export interface ThemeConfig {
   accent?: string
   background?: string
   icons?: ThemeIcons
+  // v3.1.0 — icônes TÉLÉVERSÉES par l'administrateur (demande de
+  // l'enseignante : ses propres logos/images en plus des icônes
+  // proposées). Valeur = data URL (data:image/png|svg+xml|webp;base64,
+  // …) STRICTEMENT validée côté serveur (format, taille, contenu).
+  // Une icône téléversée PRIME sur l'icône lucide choisie pour le même
+  // emplacement ; retirer le data URL retombe sur l'icône lucide.
+  customIcons?: Partial<Record<ThemeIconKind, string>>
 }
 
 /** Icônes proposées pour chaque emplacement (noms lucide-react). */
@@ -63,6 +70,84 @@ export const THEME_PRESETS: { name: string; theme: ThemeConfig }[] = [
 // ---------------- Validation ----------------
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+/** v3.1.0 — Taille maximale d'une icône téléversée, en caractères de
+ *  data URL base64 (≈ 90 Ko binaires). Suffisant pour un logo propre,
+ *  assez petit pour rester léger sur /api/config (150 étudiants).
+ *  L'administrateur est guidé vers des images REDIMENSIONNÉES côté
+ *  client (128×128) : la limite est rarement atteinte. */
+export const THEME_ICON_MAX_DATAURL = 120_000
+
+/** v3.1.0 — Dimensions maximales admises pour une image raster
+ *  téléversée AVANT réduction (le navigateur de l'admin la réduit à
+ *  128×128 ; les images plus grandes que 4096 px sont refusées,
+ *  elles proviennent probablement d'une erreur de fichier). */
+export const THEME_ICON_MAX_DIMENSION = 4096
+
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/
+
+/** v3.1.0 — Valide une icône téléversée reçue du client (ou lue en
+ *  base) : format data URL, taille, MAGIC BYTES du contenu réel
+ *  (PNG / WebP / SVG) et, pour le SVG, absence de scripts ou
+ *  d'événements inline. Retourne la valeur nettoyée ou null.
+ *  SÉCURITÉ : les images <img> n'exécutent pas les scripts d'un SVG,
+ *  mais le contenu est quand même nettoyé (défense en profondeur,
+ *  et le data URL peut finir dans d'autres contextes). */
+export function sanitizeIconDataUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  if (value.length > THEME_ICON_MAX_DATAURL) return null
+  const m = value.match(/^data:(image\/(png|svg\+xml|webp));base64,(.*)$/)
+  if (!m) return null
+  const mime = m[1]
+  const b64 = m[3]
+  if (!B64_RE.test(b64)) return null
+  let buf: Buffer
+  try {
+    buf = Buffer.from(b64, 'base64')
+  } catch {
+    return null
+  }
+  if (buf.length === 0 || buf.length > 96_000) return null
+  if (mime === 'image/png') {
+    // Signature PNG : 89 50 4E 47 0D 1A 0A
+    if (!(buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)) return null
+  } else if (mime === 'image/webp') {
+    // Signature RIFF….WEBP
+    if (buf.length < 12 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') {
+      return null
+    }
+  } else {
+    // SVG : texte contenant <svg, sans script ni attribut d'événement,
+    // sans référence externe (pas de fuite de requête au chargement).
+    const text = buf.toString('utf8').trim()
+    if (!text.includes('<svg') || text.length < 10) return null
+    const lowered = text.toLowerCase()
+    if (
+      lowered.includes('<script') ||
+      lowered.includes('javascript:') ||
+      /\son[a-z]+\s*=/.test(lowered) ||
+      lowered.includes('href="http') ||
+      lowered.includes("href='http") ||
+      lowered.includes('xlink:href="http')
+    ) {
+      return null
+    }
+  }
+  return `data:${mime};base64,${b64}`
+}
+
+/** Extrait les icônes personnalisées valides d'un objet brut (partagé
+ *  entre sanitizeTheme et parseStoredTheme — mêmes règles partout). */
+function sanitizeCustomIcons(raw: unknown): Partial<Record<ThemeIconKind, string>> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const i = raw as Record<string, unknown>
+  const cleaned: Partial<Record<ThemeIconKind, string>> = {}
+  for (const kind of ['logo', 'teacher', 'student'] as ThemeIconKind[]) {
+    const v = sanitizeIconDataUrl(i[kind])
+    if (v) cleaned[kind] = v
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined
+}
 
 export function isHexColor(v: unknown): v is string {
   return typeof v === 'string' && HEX_RE.test(v)
@@ -119,6 +204,10 @@ export function sanitizeTheme(value: unknown): ThemeConfig | null {
     }
     if (Object.keys(cleaned).length > 0) out.icons = cleaned
   }
+  // v3.1.0 — icônes téléversées (data URL validées : format, taille,
+  // magic bytes, SVG sans script).
+  const customIcons = sanitizeCustomIcons(raw.customIcons)
+  if (customIcons) out.customIcons = customIcons
   if (Object.keys(out).length === 0) return null
   return out
 }
@@ -147,6 +236,10 @@ export function parseStoredTheme(raw: string): ThemeConfig {
       }
       if (Object.keys(icons).length > 0) out.icons = icons
     }
+    // v3.1.0 — icônes téléversées : revalidées à la lecture (une valeur
+    // invalide/altérée en base est ignorée silencieusement).
+    const customIcons = sanitizeCustomIcons(raw2.customIcons)
+    if (customIcons) out.customIcons = customIcons
     return out
   } catch {
     return {}

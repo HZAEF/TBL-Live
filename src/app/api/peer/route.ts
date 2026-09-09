@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { bumpRevisions } from '@/lib/revision'
+import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
 
 // POST /api/peer — évaluation par les pairs (coéquipiers)
 export async function POST(req: NextRequest) {
@@ -64,30 +65,37 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    for (const ev of evaluations) {
-      const evaluatedId = ev.evaluatedId as string
-      const score = Number(ev.score)
-      const comment = typeof ev.comment === 'string' ? ev.comment.trim().slice(0, 1000) : ''
-      const existing = await db.peerEval.findUnique({
-        where: { evaluatorId_evaluatedId: { evaluatorId: student.id, evaluatedId } },
-      })
-      if (existing) {
-        await db.peerEval.update({
-          where: { id: existing.id },
-          data: { score, comment },
+    // v3.1.0 — VERROU D'ÉCRITURE + IDEMPOTENCE : chaque évaluation est
+    // un UPSERT par (évaluateur, évalué) — un réessai après timeout
+    // réécrit les MÊMES valeurs, aucun double effet. La boucle
+    // d'écriture est atomique pour la séance.
+    const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
+    await withSessionWrite(student.sessionId, 'peer', async () => {
+      for (const ev of evaluations) {
+        const evaluatedId = ev.evaluatedId as string
+        const score = Number(ev.score)
+        const comment = typeof ev.comment === 'string' ? ev.comment.trim().slice(0, 1000) : ''
+        const existing = await db.peerEval.findUnique({
+          where: { evaluatorId_evaluatedId: { evaluatorId: student.id, evaluatedId } },
         })
-      } else {
-        await db.peerEval.create({
-          data: {
-            sessionId: student.sessionId,
-            evaluatorId: student.id,
-            evaluatedId,
-            score,
-            comment,
-          },
-        })
+        if (existing) {
+          await db.peerEval.update({
+            where: { id: existing.id },
+            data: { score, comment },
+          })
+        } else {
+          await db.peerEval.create({
+            data: {
+              sessionId: student.sessionId,
+              evaluatorId: student.id,
+              evaluatedId,
+              score,
+              comment,
+            },
+          })
+        }
       }
-    }
+    })
 
     // v2.9.0 : évaluations par les pairs enregistrées → compteurs + 1.
     // v3.0.0 — Les évaluations par les pairs ne sont visibles que
@@ -95,6 +103,13 @@ export async function POST(req: NextRequest) {
     // seul — l'étudiant qui vient de voter voit sa confirmation par
     // le rafraîchissement forcé de son propre écran.
     await bumpRevisions(student.sessionId, { student: false })
+    await recordSessionEvent(
+      student.sessionId,
+      'peer',
+      student.id,
+      { count: evaluations.length },
+      origin
+    )
 
     return NextResponse.json({ ok: true })
   } catch (e) {

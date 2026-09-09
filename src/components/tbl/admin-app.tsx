@@ -60,7 +60,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api } from '@/lib/tbl-client'
 import { reloadAppConfig } from '@/lib/app-config'
 import { THEME_ICON_CHOICES, THEME_PRESETS, type ThemeConfig, type ThemeIconKind } from '@/lib/theme'
-import { themeIcon } from '@/lib/theme-client'
+import { customIconUrl, themeIcon } from '@/lib/theme-client'
+import { processIconFile } from '@/lib/icon-upload'
 import { buildXlsx, downloadBlob } from '@/lib/xlsx-writer'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -920,6 +921,12 @@ function ParamsTab({ state, call }: { state: AdminState; call: CallFn }) {
           bord déjà ouvert prend le nouveau délai à son rechargement).
         </p>
       </section>
+
+      {/* v3.0.0 — Performances en direct (10 s de fraîcheur) :
+          étudiants actifs, requêtes/minute, latence des routes.
+          SERVEUR LOCAL : chiffres exacts (une seule instance).
+          VERCEL : estimation de l'instance interrogée. */}
+      <PerfPanel />
 
       <section className="space-y-2 rounded-2xl border border-stone-200 bg-white p-4">
         <p className="text-sm font-bold text-stone-900">Vue d&apos;ensemble de la configuration</p>
@@ -1802,6 +1809,8 @@ function AppearanceTab({
   const [draft, setDraft] = useState<ThemeConfig>({ ...theme })
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(true)
+  // v3.1.0 — icônes téléversées : messages d'erreur / note par emplacement.
+  const [iconMsg, setIconMsg] = useState<Record<string, { error?: string; note?: string }>>({})
 
   const update = (patch: Partial<ThemeConfig>) => {
     const next = { ...draft, ...patch }
@@ -1810,6 +1819,28 @@ function AppearanceTab({
     // Aperçu immédiat : les couleurs s'appliquent à l'instant (et
     // disparaissent au rechargement tant que ce n'est pas enregistré).
     import('@/lib/theme-client').then((m) => m.applyTheme(next))
+  }
+
+  // v3.1.0 — Téléversement d'une icône personnalisée : lecture du
+  // fichier → contrôle dimensions/POIDS → réduction à 128×128 (ou SVG
+  // nettoyé) → data URL dans le brouillon de thème. Le serveur
+  // REVALIDE tout à l'enregistrement (format, magic bytes, taille).
+  const uploadIcon = async (kind: ThemeIconKind, file: File) => {
+    setIconMsg((m) => ({ ...m, [kind]: {} }))
+    const result = await processIconFile(file)
+    if (!result.ok) {
+      setIconMsg((m) => ({ ...m, [kind]: { error: result.error } }))
+      return
+    }
+    update({ customIcons: { ...draft.customIcons, [kind]: result.dataUrl } })
+    setIconMsg((m) => ({ ...m, [kind]: { note: result.note } }))
+  }
+
+  const removeIcon = (kind: ThemeIconKind) => {
+    const next = { ...draft.customIcons }
+    delete next[kind]
+    update({ customIcons: next })
+    setIconMsg((m) => ({ ...m, [kind]: {} }))
   }
 
   const iconChoice = (kind: ThemeIconKind, choices: readonly string[], label: string) => (
@@ -1940,11 +1971,92 @@ function AppearanceTab({
           {iconChoice('student', THEME_ICON_CHOICES.student, 'Icône de la carte étudiant')}
         </div>
 
+        {/* v3.1.0 — TÉLÉVERSEMENT d'icônes personnalisées : en plus des
+            icônes proposées ci-dessus, l'administrateur peut utiliser SES
+            propres images (logo de la faculté, pictogrammes maison…).
+            Une icône téléversée PRIME sur l'icône choisie ; « Retirer »
+            retombe sur l'icône d'origine. Contrôles : ≤ 4096×4096 en
+            entrée, réduction automatique à 128×128 (PNG/JPEG/WebP),
+            SVG vectoriel nettoyé, 90 Ko maximum après traitement. */}
+        <div className="space-y-2 rounded-2xl border border-dashed border-stone-300 bg-stone-50 p-4">
+          <p className="text-sm font-bold text-stone-900">Téléverser vos propres icônes</p>
+          <p className="text-xs leading-relaxed text-stone-500">
+            PNG, JPEG, WebP (≤ 4096×4096 px, réduites automatiquement à 128×128) ou SVG vectoriel
+            (≤ 64 Ko, sans script). Une icône téléversée remplace l&apos;icône choisie ci-dessus pour
+            cet emplacement — enregistrez pour l&apos;appliquer à tous les appareils.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {(['logo', 'teacher', 'student'] as ThemeIconKind[]).map((kind) => {
+              const labels: Record<ThemeIconKind, string> = {
+                logo: 'Logo (en-tête)',
+                teacher: 'Carte enseignant',
+                student: 'Carte étudiant',
+              }
+              const current = draft.customIcons?.[kind]
+              const msg = iconMsg[kind]
+              return (
+                <div key={kind} className="space-y-1.5 rounded-xl border border-stone-200 bg-white p-3">
+                  <Label className="text-xs font-semibold text-stone-700">{labels[kind]}</Label>
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-emerald-100 text-emerald-700">
+                      {current ? (
+                        <img src={current} alt="" className="h-7 w-7 object-contain" />
+                      ) : (
+                        (() => {
+                          const I = themeIcon(kind, draft.icons?.[kind])
+                          return <I className="h-5 w-5" />
+                        })()
+                      )}
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-stone-300 bg-white px-3 text-xs font-semibold text-stone-700 hover:border-emerald-400 hover:bg-emerald-50">
+                        <Upload className="h-3.5 w-3.5" />
+                        {current ? 'Remplacer' : 'Choisir un fichier'}
+                        <input
+                          type="file"
+                          accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            e.target.value = '' // permet de re-choisir le même fichier
+                            if (f) void uploadIcon(kind, f)
+                          }}
+                        />
+                      </label>
+                      {current && (
+                        <button
+                          type="button"
+                          className="h-8 rounded-xl text-xs font-semibold text-red-500 hover:bg-red-50"
+                          onClick={() => removeIcon(kind)}
+                        >
+                          Retirer l&apos;image
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {msg?.error && <p className="text-xs font-medium text-red-600">{msg.error}</p>}
+                  {msg?.note && !msg.error && (
+                    <p className="text-xs text-stone-400">{msg.note}</p>
+                  )}
+                  {current && (
+                    <p className="text-[11px] leading-snug text-emerald-700">
+                      Image téléversée active ({Math.round((current.length * 3) / 4 / 1024)} Ko) —
+                      prime sur l&apos;icône ci-dessus.
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
         {/* Aperçu */}
         <div className="grid gap-3 rounded-2xl border border-stone-200 p-4 sm:grid-cols-2">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+            <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-emerald-100 text-emerald-700">
               {(() => {
+                const custom = customIconUrl('teacher', draft)
+                if (custom) return <img src={custom} alt="" className="h-7 w-7 object-contain" />
                 const I = themeIcon('teacher', draft.icons?.teacher)
                 return <I className="h-5 w-5" />
               })()}
@@ -1957,8 +2069,10 @@ function AppearanceTab({
             </Button>
           </div>
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+            <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-amber-100 text-amber-700">
               {(() => {
+                const custom = customIconUrl('student', draft)
+                if (custom) return <img src={custom} alt="" className="h-7 w-7 object-contain" />
                 const I = themeIcon('student', draft.icons?.student)
                 return <I className="h-5 w-5" />
               })()}
@@ -2011,5 +2125,159 @@ function AppearanceTab({
         </div>
       </section>
     </div>
+  )
+}
+
+// ---------------- v3.0.0 : Performances en direct ----------------
+
+interface PerfData {
+  activeStudents: number
+  requestsPerMinute: number
+  uptimeSec: number
+  routes: { route: string; count: number; errors: number; avgMs: number; p95Ms: number; p99Ms?: number }[]
+  // v3.1.0 — file d'écriture + erreurs de base de données
+  writes?: { route: string; count: number; avgWorkMs: number; p95WorkMs: number; avgWaitMs: number }[]
+  dbErrors?: Record<string, number>
+  writeQueueDepth?: number
+}
+
+function PerfPanel() {
+  const [perf, setPerf] = useState<PerfData | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const res = await api<{ perf: PerfData }>('/api/admin', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'perf' }),
+        })
+        if (alive) setPerf(res.perf)
+      } catch {
+        // silencieux : l'indicateur ne doit jamais bloquer
+      }
+    }
+    void tick()
+    const id = setInterval(tick, 10_000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold text-emerald-900">Performances en direct</p>
+        <p className="text-xs text-emerald-700">
+          {perf ? `actualisé toutes les 10 s · ${Math.round(perf.uptimeSec / 60)} min de fonctionnement` : 'chargement…'}
+        </p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-2xl font-bold text-emerald-700">{perf?.activeStudents ?? '…'}</p>
+          <p className="text-xs text-stone-500">étudiants actifs (dernière minute)</p>
+        </div>
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-2xl font-bold text-emerald-700">{perf?.requestsPerMinute ?? '…'}</p>
+          <p className="text-xs text-stone-500">requêtes par minute</p>
+        </div>
+      </div>
+
+      {/* v3.1.0 — FILE D'ÉCRITURE (problème n°1 de l'audit) : profondeur
+          courante + erreurs de base de données. Une file qui grimpe sans
+          redescendre = écritures bloquées ; P2002 est NORMAL (idempotence),
+          P1008/P2024 signalent de la contention SQLite/connexion. */}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-xl bg-white p-3">
+          <p
+            className={cn(
+              'text-2xl font-bold',
+              (perf?.writeQueueDepth ?? 0) > 20 ? 'text-amber-600' : 'text-emerald-700'
+            )}
+          >
+            {perf?.writeQueueDepth ?? '…'}
+          </p>
+          <p className="text-xs text-stone-500">
+            écritures en attente (file par séance — un pic passager est normal)
+          </p>
+        </div>
+        <div className="rounded-xl bg-white p-3">
+          <p className="text-2xl font-bold text-emerald-700">
+            {perf?.dbErrors && Object.keys(perf.dbErrors).length > 0
+              ? Object.entries(perf.dbErrors)
+                  .map(([code, n]) => `${code} ×${n}`)
+                  .join(' · ')
+              : 'aucune'}
+          </p>
+          <p className="text-xs text-stone-500">
+            erreurs base de données (P2002 = double envoi neutralisé, normal ; P1008/P2024 = contention)
+          </p>
+        </div>
+      </div>
+
+      {/* v3.1.0 — durées des ÉCRITURES (attente dans la file + travail) */}
+      {perf?.writes && perf.writes.length > 0 && (
+        <div className="overflow-x-auto rounded-xl bg-white p-2">
+          <p className="px-1 py-1 text-xs font-bold text-stone-600">Écritures (file d'attente + travail)</p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-stone-500">
+                <th className="py-1 pr-2">Route</th>
+                <th className="py-1 pr-2">Écritures</th>
+                <th className="py-1 pr-2">Attente moy.</th>
+                <th className="py-1 pr-2">Travail moy.</th>
+                <th className="py-1">Travail p95</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perf.writes.map((w) => (
+                <tr key={w.route} className="border-t border-stone-100">
+                  <td className="py-1 pr-2 font-mono">{w.route}</td>
+                  <td className="py-1 pr-2">{w.count}</td>
+                  <td className="py-1 pr-2">{w.avgWaitMs} ms</td>
+                  <td className="py-1 pr-2">{w.avgWorkMs} ms</td>
+                  <td className="py-1">{w.p95WorkMs} ms</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {perf && perf.routes.length > 0 && (
+        <div className="overflow-x-auto rounded-xl bg-white p-2">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-stone-500">
+                <th className="py-1 pr-2">Route</th>
+                <th className="py-1 pr-2">Requêtes</th>
+                <th className="py-1 pr-2">Moyenne</th>
+                <th className="py-1 pr-2">p95</th>
+                <th className="py-1 pr-2">p99</th>
+                <th className="py-1">Erreurs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perf.routes.map((r) => (
+                <tr key={r.route} className="border-t border-stone-100">
+                  <td className="py-1 pr-2 font-mono">{r.route}</td>
+                  <td className="py-1 pr-2">{r.count}</td>
+                  <td className="py-1 pr-2">{r.avgMs} ms</td>
+                  <td className="py-1 pr-2">{r.p95Ms} ms</td>
+                  <td className="py-1 pr-2">{r.p99Ms ?? '—'} ms</td>
+                  <td className="py-1">{r.errors}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs leading-relaxed text-emerald-800">
+        En mode réseau local, ces chiffres sont exacts (une seule instance). Sur la version en
+        ligne, ils reflètent l&apos;instance interrogée — une approximation suffisante pour
+        repérer un problème pendant un cours.
+      </p>
+    </section>
   )
 }

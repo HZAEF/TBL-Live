@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { bumpRevisions } from '@/lib/revision'
 import { extractToken } from '@/lib/tbl'
+import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
 
 // POST /api/sai — soumission du questionnaire de fin de séance (TBL-SAI).
 //
@@ -111,26 +112,38 @@ export async function POST(req: NextRequest) {
     }
 
     // Enregistrement atomique : réponses + date de complétion + commentaire.
-    await db.$transaction([
-      db.saiResponse.createMany({
-        data: items.map((it) => ({
-          studentId: student.id,
-          itemId: it.id,
-          value: byItem.get(it.id) as number,
-        })),
-      }),
-      db.student.update({
-        where: { id: student.id },
-        data: { saiCompletedAt: new Date(), saiComment: comment || null },
-      }),
-    ])
+    // v3.1.0 — sous VERROU D'ÉCRITURE de la séance (les $transaction
+    // de Prisma restent utilisées : elles sont courtes et désormais
+    // sérialisées par la file — aucun retour du risque P1008).
+    const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
+    await withSessionWrite(student.sessionId, 'sai', async () => {
+      await db.$transaction([
+        db.saiResponse.createMany({
+          data: items.map((it) => ({
+            studentId: student.id,
+            itemId: it.id,
+            value: byItem.get(it.id) as number,
+          })),
+        }),
+        db.student.update({
+          where: { id: student.id },
+          data: { saiCompletedAt: new Date(), saiComment: comment || null },
+        }),
+      ])
+    })
 
     // v2.9.0 : questionnaire soumis (note finale et rang débloqués pour
     // cet étudiant) → compteurs + 1.
     // v3.0.0 : idem — le questionnaire terminé change le tableau de
     // bord (statistiques) mais rien de visible pour les autres
     // étudiants → compteur enseignant seul.
+    // v3.1.0 : SAUVEGARDE D'IDEMPOTENCE — si le réessai (timeout réseau)
+    // arrive APRÈS la complétion mais AVANT que le client ait vu la
+    // réponse, la contrainte @@unique([studentId, itemId]) et le test
+    // saiCompletedAt ci-dessus garantissent qu'aucune réponse n'est
+    // dupliquée : la requête retombe dans la branche alreadyCompleted.
     await bumpRevisions(student.sessionId, { student: false })
+    await recordSessionEvent(student.sessionId, 'sai', student.id, {}, origin)
 
     return NextResponse.json({ ok: true })
   } catch (e) {

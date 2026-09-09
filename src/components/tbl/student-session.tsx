@@ -13,13 +13,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { api, removeStudentSession, usePoll } from '@/lib/tbl-client'
+import { api, removeStudentSession, useNetworkStatus, usePoll, useSubmitState } from '@/lib/tbl-client'
 import { PHASE_INFO, type StudentStateDTO, type SaiItemDTO } from '@/lib/tbl-types'
 import { useI18n } from '@/lib/i18n'
 import { fmtNote } from '@/lib/grades'
 import { noteServerNow } from '@/lib/server-clock'
 import { SAI_SUBSCALES, SAI_SUBSCALE_INFO, SAI_LIKERT_KEYS, saiItemText } from '@/lib/sai'
-import { ChoiceButton, choiceLetter, ElapsedSince, InfoCard, PhaseBadge } from './shared'
+import { ChoiceButton, choiceLetter, ElapsedSince, InfoCard, NetworkPill, PhaseBadge, SubmitStatus } from './shared'
 import { IratQuiz, TratQuiz, AppealView, ApplicationView, PeerView } from './student-quizzes'
 import { AntiCapture } from './anti-capture'
 import { Textarea } from '@/components/ui/textarea'
@@ -98,6 +98,11 @@ export function StudentSession({
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [showCode, setShowCode] = useState(false)
   const { t } = useI18n()
+  // v3.1.0 — ÉTAT RÉSEAU (problème n°12) : pastille discrète dans
+  // l'en-tête — Hors ligne / Reconnexion… / Connexion lente — pilotée
+  // par les échecs du sondage + les événements online/offline du
+  // navigateur. Invisible quand tout va bien : zéro bruit visuel.
+  const network = useNetworkStatus(error)
 
   if (loading && !data) {
     return (
@@ -177,6 +182,9 @@ export function StudentSession({
             <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-stone-500">
               <PhaseBadge phase={status} />
               <span>{t(PHASE_INFO[status].label)}</span>
+              {/* v3.1.0 — état réseau : visible SEULEMENT en cas de
+                  problème (sinon aucune pastille, aucun bruit). */}
+              <NetworkPill quality={network.quality} />
             </p>
           </div>
           <Button
@@ -493,7 +501,11 @@ function SaiQuestionnaire({
   const [answers, setAnswers] = useState<Record<string, number>>({})
   const [comment, setComment] = useState('')
   const [error, setError] = useState('')
-  const [sending, setSending] = useState(false)
+  // v3.1.0 — état d'envoi explicite + réessai : idempotent côté serveur
+  // (saiCompletedAt + contrainte unique par item : un renvoi après
+  // timeout retombe dans la branche « déjà complété » → même résultat).
+  const submitState = useSubmitState()
+  const sending = submitState.phase.state === 'sending'
 
   const answered = Object.keys(answers).length
   // Questionnaire sans items (séance personnalisée) : envoi direct.
@@ -505,9 +517,8 @@ function SaiQuestionnaire({
       return
     }
     setError('')
-    setSending(true)
-    try {
-      await api('/api/sai', {
+    const result = await submitState.run(() =>
+      api<{ ok: boolean }>('/api/sai', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -515,10 +526,9 @@ function SaiQuestionnaire({
           comment: comment.trim() || undefined,
         }),
       })
+    )
+    if (result !== null) {
       await refresh()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : t('Erreur inconnue.'))
-      setSending(false)
     }
   }
 
@@ -604,13 +614,16 @@ function SaiQuestionnaire({
         <p className="text-center text-sm font-semibold text-stone-600">
           {t('{n} / {total} réponses', { n: answered, total: items.length })}
         </p>
-        {error && (
+        {error && submitState.phase.state !== 'failed' && (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </p>
         )}
+        {submitState.phase.state !== 'idle' && (
+          <SubmitStatus phase={submitState.phase} onRetry={() => submit()} />
+        )}
         <Button
-          onClick={submit}
+          onClick={() => submit()}
           disabled={sending || answered < items.length}
           className="h-12 w-full bg-emerald-600 text-base hover:bg-emerald-700"
         >

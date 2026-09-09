@@ -14,7 +14,9 @@ import {
 // TBL Live v3.0.0 — /api/teacher-auth : comptes enseignants
 //
 // GET  : suis-je connecté ? (→ prénom, nom, email du compte)
-// POST : login | logout | change_password | forgot_password
+// POST : login | logout | change_password | forgot_password |
+//        list_sessions | open_session   (v3.1.0 : « Mes séances »
+//        du COMPTE, visibles sur n'importe quel appareil)
 //
 // Les comptes sont créés par l'administrateur dans /admin
 // (espace « Comptes »). Le mot de passe oublié ne se réinitialise
@@ -29,6 +31,7 @@ interface AuthAction {
   password?: unknown
   current?: unknown
   next?: unknown
+  code?: unknown
 }
 
 // Délai minimum entre deux demandes « mot de passe oublié » du
@@ -165,6 +168,93 @@ export async function POST(req: NextRequest) {
       })
       // Reconnexion immédiate avec le nouveau mot de passe.
       return issueTeacherSession(req, account.id)
+    }
+
+    // ------------------------------------------------------------
+    // v3.1.0 — « MES SÉANCES » DU COMPTE (demande de l'enseignante :
+    // toutes les séances ACTIVES de l'enseignant, visibles sur N'IM-
+    // PORTE QUEL appareil où il se connecte — plus de « Mes séances
+    // sur cet appareil » lié au stockage local du navigateur).
+    //
+    // list_sessions : les séances APPARTENANT au compte (teacherId),
+    //  hors corbeille — actives d'abord (phase en cours), terminées
+    //  ensuite, triées par activité de phase la plus récente. Comprend
+    //  le nombre d'étudiants inscrits (une seule requête groupBy).
+    //
+    // open_session : le PROPRIÉTAIRE du compte récupère le jeton
+    //  d'accès du tableau de bord de SA séance sans ressaisir le
+    //  PIN — l'identité est déjà prouvée par le cookie de session du
+    //  COMPTE (12 h). SÉCURITÉ : le jeton n'est renvoyé QUE si la
+    //  séance appartient à ce compte ; sinon 404/403. On ne fait
+    //  PAS tourner le jeton : la synchronisation Internet ↔ local
+    //  s'appuie sur sa stabilité (les deux instances partagent la
+    //  même valeur), et le rehausser à chaque changement d'appareil
+    //  invaliderait l'autre instance.
+    // ------------------------------------------------------------
+    if (action === 'list_sessions') {
+      const sessions = await db.session.findMany({
+        where: { teacherId: auth.teacher.id, deletedAt: null },
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          status: true,
+          phaseStartedAt: true,
+          createdAt: true,
+          syncedAt: true,
+        },
+        orderBy: { phaseStartedAt: 'desc' },
+        take: 100,
+      })
+      // Nombre d'étudiants par séance (une seule requête groupée —
+      // le groupBy se fait par id technique, jamais par code).
+      const counts = await db.student.groupBy({
+        by: ['sessionId'],
+        _count: { _all: true },
+      })
+      const countMap = new Map(counts.map((c) => [c.sessionId, c._count._all]))
+      // Tri : séances ACTIVES (non terminées) d'abord, par activité
+      // de phase la plus récente ; les terminées ensuite.
+      const withStudents = sessions.map((s) => ({
+        code: s.code,
+        title: s.title,
+        status: s.status,
+        students: countMap.get(s.id) ?? 0,
+        phaseStartedAt: s.phaseStartedAt.toISOString(),
+        createdAt: s.createdAt.toISOString(),
+        syncedAt: s.syncedAt ? s.syncedAt.toISOString() : null,
+      }))
+      withStudents.sort((a, b) => {
+        const aDone = a.status === 'finished'
+        const bDone = b.status === 'finished'
+        if (aDone !== bDone) return aDone ? 1 : -1
+        return b.phaseStartedAt.localeCompare(a.phaseStartedAt)
+      })
+      return NextResponse.json({ sessions: withStudents })
+    }
+
+    if (action === 'open_session') {
+      const code =
+        typeof body?.code === 'string' ? body.code.trim().toUpperCase() : ''
+      if (code.length !== 6) {
+        return NextResponse.json({ error: 'Code de séance invalide.' }, { status: 400 })
+      }
+      const session = await db.session.findUnique({ where: { code } })
+      if (!session || session.deletedAt) {
+        return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
+      }
+      if (session.teacherId !== auth.teacher.id) {
+        // La séance existe mais n'appartient pas à ce compte (importée
+        // par synchronisation, créée avant les comptes, ou créée par un
+        // autre enseignant) : même réponse que si elle n'existait pas —
+        // aucun renseignement sur les séances d'autrui.
+        return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
+      }
+      return NextResponse.json({
+        code: session.code,
+        title: session.title,
+        token: session.teacherToken,
+      })
     }
 
     return NextResponse.json({ error: 'Action inconnue.' }, { status: 400 })

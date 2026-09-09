@@ -20,12 +20,34 @@ interface RouteStats {
   errors: number
   totalMs: number
   lastMs: number
-  /** 200 dernières durées (fenêtre glissante pour le p95). */
+  /** 200 dernières durées (fenêtre glissante pour le p95/p99). */
+  recent: number[]
+}
+
+interface WriteStats {
+  count: number
+  totalWorkMs: number
+  totalWaitMs: number
   recent: number[]
 }
 
 const routes = new Map<string, RouteStats>()
 const MAX_RECENT = 200
+
+// v3.1.0 — Statistiques de la FILE D'ÉCRITURE (verrou par séance) :
+// attente avant le verrou + durée réelle du travail d'écriture.
+const writes = new Map<string, WriteStats>()
+
+// v3.1.0 — Codes d'erreur Prisma vus (P2002 double envoi idempotent,
+// P1008 délai de transaction dépassé, P2024 timeout connexion, P2033…).
+// P1008 et P2024 en croissance = contention SQLite/connexion à
+// diagnostiquer immédiatement ; P2002 est NORMAL (idempotence).
+const dbErrors = new Map<string, number>()
+
+/** v3.1.0 — File d'écriture : travaux en attente + en cours (toutes
+ *  séances confondues) — un pic passager est normal (rafale de
+ *  réponses), une valeur qui grimpe sans redescendre = blocage. */
+let writeQueueDepth = 0
 
 /** Jetons étudiants vus récemment → estimation « étudiants actifs ». */
 const activeTokens = new Map<string, number>()
@@ -41,6 +63,36 @@ function statsFor(route: string): RouteStats {
     routes.set(route, s)
   }
   return s
+}
+
+/**
+ * v3.1.0 — Enregistre une ÉCRITURE passée par la file (verrou par
+ * séance) : attente dans la file + durée du travail lui-même.
+ */
+export function recordWrite(route: string, waitMs: number, workMs: number): void {
+  let s = writes.get(route)
+  if (!s) {
+    s = { count: 0, totalWorkMs: 0, totalWaitMs: 0, recent: [] }
+    writes.set(route, s)
+  }
+  s.count += 1
+  s.totalWorkMs += workMs
+  s.totalWaitMs += waitMs
+  s.recent.push(workMs)
+  if (s.recent.length > MAX_RECENT) s.recent.shift()
+}
+
+/** v3.1.0 — Enregistre un code d'erreur de base de données (P1008,
+ * P2024, P2002…). Les exceptions Prisma portent un champ « code ».
+ */
+export function recordDbError(code: string): void {
+  if (!/^P[0-9]{3,4}$/.test(code)) return
+  dbErrors.set(code, (dbErrors.get(code) ?? 0) + 1)
+}
+
+/** v3.1.0 — Compteur global de la file d'écriture (attente + en cours). */
+export function recordWriteQueueDelta(delta: number): void {
+  writeQueueDepth = Math.max(0, writeQueueDepth + delta)
 }
 
 /**
@@ -94,6 +146,12 @@ export function withMetrics<C>(
       return res
     } catch (e) {
       recordRequest(route, Date.now() - started, false)
+      // v3.1.0 — capture AUTOMATIQUE des codes Prisma (P1008 contention,
+      // P2024 timeout, P2002 double envoi idempotent…) sans rien logger :
+      // l'erreur elle-même n'est jamais sérialisée (aucun secret, aucun
+      // body de requête n'entre dans les compteurs).
+      const code = (e as { code?: unknown } | null)?.code
+      if (typeof code === 'string') recordDbError(code)
       throw e
     }
   }
@@ -109,8 +167,13 @@ export interface PerfSnapshot {
     errors: number
     avgMs: number
     p95Ms: number
+    p99Ms: number
     lastMs: number
   }[]
+  // v3.1.0
+  writes: { route: string; count: number; avgWorkMs: number; p95WorkMs: number; avgWaitMs: number }[]
+  dbErrors: Record<string, number>
+  writeQueueDepth: number
 }
 
 /** Photographie des compteurs (affichée dans /admin et /api/config?live=1). */
@@ -133,9 +196,22 @@ export function perfSnapshot(): PerfSnapshot {
         errors: s.errors,
         avgMs: s.count > 0 ? Math.round(s.totalMs / s.count) : 0,
         p95Ms: percentile([...s.recent].sort((a, b) => a - b), 95),
+        p99Ms: percentile([...s.recent].sort((a, b) => a - b), 99),
         lastMs: s.lastMs,
       }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 12),
+    writes: [...writes.entries()]
+      .map(([route, s]) => ({
+        route,
+        count: s.count,
+        avgWorkMs: s.count > 0 ? Math.round(s.totalWorkMs / s.count) : 0,
+        p95WorkMs: percentile([...s.recent].sort((a, b) => a - b), 95),
+        avgWaitMs: s.count > 0 ? Math.round(s.totalWaitMs / s.count) : 0,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12),
+    dbErrors: Object.fromEntries(dbErrors),
+    writeQueueDepth,
   }
 }

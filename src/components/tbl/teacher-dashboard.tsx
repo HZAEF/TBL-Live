@@ -631,7 +631,12 @@ export function TeacherDashboard({
               className="bg-emerald-600 hover:bg-emerald-700"
               onClick={async () => {
                 if (pendingPhase) {
-                  await manage('set_phase', { phase: pendingPhase })
+                  // v3.1.0 — expectedPhase : la commande embarque la phase
+                  // QUE LE TABLEAU DE BORD CONNAÎT : si la séance a avancé
+                  // entre-temps (autre appareil, requête lente en file),
+                  // le serveur REFUSE la commande périmée au lieu de
+                  // l'appliquer — l'affichage se resynchronise tout seul.
+                  await manage('set_phase', { phase: pendingPhase, expectedPhase: status })
                   // v2.7.0 : fin de séance → synchronisation FINALE avec la
                   // version en ligne (si une adresse est configurée) : tous
                   // les résultats partent sur Internet, sans action

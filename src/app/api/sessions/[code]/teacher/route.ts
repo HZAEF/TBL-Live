@@ -117,6 +117,24 @@ export async function POST(
       await migratePinToHash(session.id, candidate)
     }
 
+    // v3.1.0 — Réclamation de propriété : une séance SANS propriétaire
+    // (importée par la synchronisation hybride, ou créée avant les
+    // comptes v3.0) dont l'enseignant vient de prouver la maîtrise
+    // (code + PIN + compte connecté) est rattachée à son compte : elle
+    // apparaît alors dans « Mes séances » sur tous ses appareils. Une
+    // séance déjà possédée (par lui ou un autre compte) n'est JAMAIS
+    // réclamée — le rattachement initial fait foi.
+    if (!session.teacherId) {
+      try {
+        await db.session.update({
+          where: { id: session.id },
+          data: { teacherId: auth.teacher.id },
+        })
+      } catch {
+        // compte supprimé entre-temps : la séance reste sans propriétaire
+      }
+    }
+
     return NextResponse.json({ code: session.code, teacherToken: session.teacherToken })
   } catch (e) {
     console.error('POST /api/sessions/[code]/teacher', e)
