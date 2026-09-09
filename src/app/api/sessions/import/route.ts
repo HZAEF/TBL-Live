@@ -135,7 +135,17 @@ export async function POST(req: NextRequest) {
     }
 
     const hashedPin = isV2 ? undefined : await hashPin(pin)
-    const { session } = await replaceSessionFromBackup(backup, hashedPin, teacherId)
+    // v3.2.0 : en format v2 (sync machine ↔ machine), AUCUN teacherId
+    // explicite n'est fourni — replaceSessionFromBackup résout le
+    // propriétaire via l'EMAIL transporté par la sauvegarde (ownerEmail)
+    // contre les comptes de CETTE instance → le miroir appartient au
+    // même enseignant et « Mes séances » fonctionne des deux côtés.
+    // En format v1 (navigateur), le compte connecté prime, comme avant.
+    const { session } = await replaceSessionFromBackup(
+      backup,
+      hashedPin,
+      isV2 ? undefined : teacherId
+    )
 
     // v2.9.0 — La séance vient d'être recréée : incrément EXPLICITE des
     // compteurs (en plus du +1 inscrit par replaceSessionFromBackup).

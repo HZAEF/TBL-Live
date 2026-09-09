@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { getSessionByCode, parseChoices, extractToken, safeEqualStrings } from '@/lib/tbl'
 import { applyLifecycle } from '@/lib/session-lifecycle'
 import { readRevParam } from '@/lib/revision'
+import { listCollaboratorsDetailed } from '@/lib/sharing'
 
 // GET /api/sessions/[code]/dashboard — données complètes du tableau de bord
 // enseignant. Jeton transmis par l'en-tête « Authorization: Bearer … » (les
@@ -52,7 +53,7 @@ async function doGET(
       })
     }
 
-    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments, saiDetailedResponses] =
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments, saiDetailedResponses, collaborators, ownerAccount] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
@@ -156,6 +157,16 @@ async function doGET(
           orderBy: { createdAt: 'asc' },
           select: { studentId: true, itemId: true, value: true },
         }),
+        // v3.2.0 : partage de la séance — liste des enseignants invités
+        // (avec statut de leur compte) + email du propriétaire (pour
+        // l'affichage « partagée par » dans l'onglet Configurations).
+        listCollaboratorsDetailed(session.id),
+        live.teacherId
+          ? db.teacherAccount.findUnique({
+              where: { id: live.teacherId },
+              select: { email: true, firstName: true, lastName: true },
+            })
+          : Promise.resolve(null),
       ])
 
     // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
@@ -196,6 +207,15 @@ async function doGET(
         dataPurgedAt: live.dataPurgedAt,
         // v3.0.0 : signalements anti-capture activés pour cette séance ?
         reportsEnabled: live.reportsEnabled === true,
+        // v3.2.0 : partage — enseignants invités (email, nom si le
+        // compte existe, statut du compte) et propriétaire. Un invité
+        // dont le compte n'existe pas encore reste listé : l'adminis-
+        // trateur est invité à le créer (même email) — la séance
+        // apparaîtra alors dans ses « Mes séances ».
+        collaborators,
+        owner: ownerAccount
+          ? { email: ownerAccount.email, name: `${ownerAccount.firstName} ${ownerAccount.lastName}` }
+          : null,
       },
       questions: questions.map((q) => ({
         id: q.id,

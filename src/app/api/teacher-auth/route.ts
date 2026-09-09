@@ -180,20 +180,39 @@ export async function POST(req: NextRequest) {
     //  hors corbeille — actives d'abord (phase en cours), terminées
     //  ensuite, triées par activité de phase la plus récente. Comprend
     //  le nombre d'étudiants inscrits (une seule requête groupBy).
+    //  v3.2.0 : PLUS les séances PARTAGÉES avec ce compte (invitations
+    //  par email — « role: collaborator ») : la co-animation d'une
+    //  séance TBL à plusieurs devient naturelle.
     //
-    // open_session : le PROPRIÉTAIRE du compte récupère le jeton
-    //  d'accès du tableau de bord de SA séance sans ressaisir le
-    //  PIN — l'identité est déjà prouvée par le cookie de session du
-    //  COMPTE (12 h). SÉCURITÉ : le jeton n'est renvoyé QUE si la
-    //  séance appartient à ce compte ; sinon 404/403. On ne fait
-    //  PAS tourner le jeton : la synchronisation Internet ↔ local
-    //  s'appuie sur sa stabilité (les deux instances partagent la
-    //  même valeur), et le rehausser à chaque changement d'appareil
-    //  invaliderait l'autre instance.
+    // open_session : le PROPRIÉTAIRE du compte (ou un INVITÉ de la
+    //  séance) récupère le jeton d'accès du tableau de bord sans
+    //  ressaisir le PIN — l'identité est déjà prouvée par le cookie
+    //  de session du COMPTE (12 h). SÉCURITÉ : le jeton n'est renvoyé
+    //  QUE si la séance appartient à ce compte ou lui est partagée ;
+    //  sinon 404/403. On ne fait PAS tourner le jeton : la synchroni-
+    //  sation Internet ↔ local s'appuie sur sa stabilité (les deux
+    //  instances partagent la même valeur), et le rehausser à chaque
+    //  changement d'appareil invaliderait l'autre instance.
     // ------------------------------------------------------------
     if (action === 'list_sessions') {
+      // v3.2.0 — séances partagées avec ce compte (par email), hors
+      // corbeille. Une seule requête : l'index [email] fait le travail.
+      const shared = await db.sessionCollaborator.findMany({
+        where: { email: auth.teacher.email },
+        select: { sessionId: true },
+        take: 200,
+      })
+      const sharedIds = shared.map((s) => s.sessionId)
       const sessions = await db.session.findMany({
-        where: { teacherId: auth.teacher.id, deletedAt: null },
+        where: {
+          deletedAt: null,
+          OR: [
+            { teacherId: auth.teacher.id },
+            // v3.2.0 : invitations reçues (la séance apparaît dans les
+            // « Mes séances » de l'invité — même ouverture sans PIN).
+            ...(sharedIds.length > 0 ? [{ id: { in: sharedIds } }] : []),
+          ],
+        },
         select: {
           id: true,
           code: true,
@@ -202,6 +221,7 @@ export async function POST(req: NextRequest) {
           phaseStartedAt: true,
           createdAt: true,
           syncedAt: true,
+          teacherId: true,
         },
         orderBy: { phaseStartedAt: 'desc' },
         take: 100,
@@ -223,6 +243,11 @@ export async function POST(req: NextRequest) {
         phaseStartedAt: s.phaseStartedAt.toISOString(),
         createdAt: s.createdAt.toISOString(),
         syncedAt: s.syncedAt ? s.syncedAt.toISOString() : null,
+        // v3.2.0 : « owner » (ma séance) ou « collaborator » (partagée
+        // avec moi par un collègue) — le badge s'affiche côté client.
+        role: (s.teacherId === auth.teacher.id ? 'owner' : 'collaborator') as
+          | 'owner'
+          | 'collaborator',
       }))
       withStudents.sort((a, b) => {
         const aDone = a.status === 'finished'
@@ -243,7 +268,18 @@ export async function POST(req: NextRequest) {
       if (!session || session.deletedAt) {
         return NextResponse.json({ error: 'Séance introuvable.' }, { status: 404 })
       }
-      if (session.teacherId !== auth.teacher.id) {
+      // v3.2.0 — accès SANS PIN pour le propriétaire OU un invité de
+      // la séance (partage par email). La vérification d'invitation
+      // se fait par EMAIL : c'est l'identifiant stable du compte.
+      let allowed = session.teacherId === auth.teacher.id
+      if (!allowed && auth.teacher.email) {
+        const share = await db.sessionCollaborator.findUnique({
+          where: { sessionId_email: { sessionId: session.id, email: auth.teacher.email } },
+          select: { id: true },
+        })
+        allowed = share !== null
+      }
+      if (!allowed) {
         // La séance existe mais n'appartient pas à ce compte (importée
         // par synchronisation, créée avant les comptes, ou créée par un
         // autre enseignant) : même réponse que si elle n'existait pas —

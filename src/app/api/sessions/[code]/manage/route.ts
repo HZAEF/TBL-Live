@@ -19,6 +19,8 @@ import { SAI_SUBSCALES, DEFAULT_SAI_ITEMS } from '@/lib/sai'
 import { buildSyncBackup, syncNow, normalizeRemoteUrl, SyncError } from '@/lib/sync'
 import { bumpRevisions } from '@/lib/revision'
 import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
+import { requireTeacher } from '@/lib/teacher-auth'
+import { checkShareEmail, isSessionVisibleTo, MAX_COLLABORATORS } from '@/lib/sharing'
 
 /** v3.1.0 — Valide le JSON stocké d'un payload d'événement (jamais
  *  de secret dedans par construction) ; '{}' si illisible. */
@@ -288,10 +290,10 @@ export async function POST(
     const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
     let res: NextResponse
     if (READ_ONLY_ACTIONS.has(action)) {
-      res = await runManageAction(session, body as Record<string, unknown>, action)
+      res = await runManageAction(session, body as Record<string, unknown>, action, req)
     } else {
       res = await withSessionWrite(session.id, 'manage', async () => {
-        const r = await runManageAction(session, body as Record<string, unknown>, action)
+        const r = await runManageAction(session, body as Record<string, unknown>, action, req)
         // v2.9.0 — Sondage allégé : toute action qui MODIFIE la séance
         // incrémente les compteurs (étudiants + tableau de bord renouvellent
         // leur état au prochain sondage). Sont exclues les actions de pure
@@ -353,11 +355,14 @@ export async function POST(
 // v2.9.0 — Commutateur des actions enseignant (extrait de POST).
 // Renvoie la réponse HTTP ; l'authentification et les compteurs de
 // révision restent dans POST.
+// v3.2.0 — req est transmis (duplicate_session et le partage ont
+// besoin du COOKIE de compte enseignant pour identifier l'appelant).
 // ------------------------------------------------------------
 async function runManageAction(
   session: Session,
   body: Record<string, unknown>,
-  action: string
+  action: string,
+  req: NextRequest
 ): Promise<NextResponse> {
     switch (action) {
       case 'set_phase': {
@@ -1135,7 +1140,30 @@ async function runManageAction(
         // étudiants (noms, réponses, notes, réclamations, évaluations).
         // La copie repart de la phase d'accueil (lobby) avec un nouveau
         // code et un nouveau PIN.
+        //
+        // v3.2.0 — PROPRIÉTAIRE DE LA COPIE (bug signalé : la copie
+        // atterrissait dans « Autres séances (sur cet appareil) » au
+        // lieu de « Mes séances »). Trois cas, dans l'ordre :
+        //  1. l'appelant est connecté à un COMPTE enseignant et ce
+        //     compte peut voir la séance source (propriétaire ou
+        //     invité) → la copie appartient à LUI (l'invité qui
+        //     duplique garde sa copie) ;
+        //  2. sinon, la source a un propriétaire → la copie hérite
+        //     de ce propriétaire (duplication depuis la machine locale
+        //     sans cookie de compte — le comportement reste intuitif :
+        //     dupliquer MA séance donne MA séance) ;
+        //  3. séance sans propriétaire (import, pré-v3.0) → copie
+        //     sans propriétaire, comme avant (repli PIN + réclamation).
         const pin = isValidPin(body.pin) ? normalizePin(body.pin) : randomCode(6)
+        let copyTeacherId: string | null = session.teacherId
+        try {
+          const auth = await requireTeacher(req)
+          if (auth.ok && (session.teacherId === auth.teacher.id || (await isSessionVisibleTo(session, auth.teacher.email)))) {
+            copyTeacherId = auth.teacher.id
+          }
+        } catch {
+          // pas de compte connecté (machine locale, jeton seul) → héritage
+        }
         const [teams, freeQuestions, cases, saiItems] = await Promise.all([
           db.team.findMany({
             where: { sessionId: session.id },
@@ -1178,6 +1206,9 @@ async function runManageAction(
             title,
             teacherPin: teacherPinHash,
             teacherToken,
+            // v3.2.0 : la copie est rattachée au compte approprié (voir
+            // plus haut) → elle apparaît dans « Mes séances ».
+            teacherId: copyTeacherId,
             iratMinutes: session.iratMinutes,
             status: 'lobby',
             teams: {
@@ -1240,6 +1271,105 @@ async function runManageAction(
           title,
           pin,
         })
+      }
+
+      // ------------------------------------------------------------
+      // v3.2.0 — PARTAGE DE LA SÉANCE AVEC D'AUTRES ENSEIGNANTS
+      // (demande de l'enseignante : « partager la séance avec les
+      // autres enseignants en mettant leurs emails institutionnels
+      // pour que la séance s'ajoute dans leurs Mes séances »).
+      //
+      // share_session : invite un collègue par son email (domaine
+      // institutionnel vérifié, comme les comptes). L'invitation ne
+      // transmet AUCUN secret : c'est le COMPTE du collègue qui prouve
+      // son identité ; le serveur lui livre alors le jeton via
+      // open_session (teacher-auth).
+      //
+      // unshare_session : retire une invitation. Le tableau de bord
+      // d'un invité déjà ouvert (jeton en main) continue de
+      // fonctionner jusqu'à expiration de page — le retrait prend
+      // effet à la prochaine ouverture depuis « Mes séances ».
+      //
+      // Les deux actions passent par la FILE D'ÉCRITURE (mutations)
+      // et incrémentent revisionTeacher : les autres tableaux de bord
+      // ouverts actualisent la liste des invités au cycle suivant.
+      // ------------------------------------------------------------
+      case 'share_session': {
+        const settings = await db.adminSetting.findUnique({
+          where: { id: 'singleton' },
+          select: { teacherEmailDomain: true },
+        })
+        const check = checkShareEmail(body.email, settings?.teacherEmailDomain ?? '@')
+        if (!check.ok) {
+          return NextResponse.json({ error: check.error }, { status: 400 })
+        }
+        const email = check.email
+        // Le propriétaire s'inviterait lui-même : inutile.
+        if (session.teacherId) {
+          const owner = await db.teacherAccount.findUnique({
+            where: { id: session.teacherId },
+            select: { email: true },
+          })
+          if (owner?.email === email) {
+            return NextResponse.json(
+              { error: 'Cet email est déjà le propriétaire de la séance.' },
+              { status: 409 }
+            )
+          }
+        }
+        // v3.2.0 : l'action est déjà SOUS le verrou d'écriture (POST
+        // enveloppe toutes les mutations dans withSessionWrite) — on
+        // vérifie/exécute directement, SANS réimbriquer un second
+        // withSessionWrite (qui attendrait la fin de… lui-même).
+        const existing = await db.sessionCollaborator.findUnique({
+          where: { sessionId_email: { sessionId: session.id, email } },
+          select: { id: true },
+        })
+        if (existing) {
+          return NextResponse.json({ ok: true, duplicate: true, email, hasAccount: null, name: null })
+        }
+        const count = await db.sessionCollaborator.count({ where: { sessionId: session.id } })
+        if (count >= MAX_COLLABORATORS) {
+          return NextResponse.json(
+            { error: `Maximum de ${MAX_COLLABORATORS} enseignants invités par séance.` },
+            { status: 409 }
+          )
+        }
+        await db.sessionCollaborator.create({ data: { sessionId: session.id, email } })
+        // La liste des invités est visible par l'enseignant → les
+        // autres tableaux de bord ouverts se rafraîchissent.
+        await db.session.update({
+          where: { id: session.id },
+          data: { revisionTeacher: { increment: 1 } },
+        })
+        // Le compte existe-t-il déjà ? (message clair pour inviter
+        // l'administrateur à le créer sinon — il n'y a AUCUNE fuite :
+        // l'appelant détient déjà le jeton enseignant de la séance.)
+        const account = await db.teacherAccount.findUnique({
+          where: { email },
+          select: { firstName: true, lastName: true },
+        })
+        return NextResponse.json({
+          ok: true,
+          duplicate: false,
+          email,
+          hasAccount: !!account,
+          name: account ? `${account.firstName} ${account.lastName}` : null,
+        })
+      }
+
+      case 'unshare_session': {
+        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+        if (!email) {
+          return NextResponse.json({ error: 'Email manquant.' }, { status: 400 })
+        }
+        // Déjà sous le verrou d'écriture (POST) — exécution directe.
+        await db.sessionCollaborator.deleteMany({ where: { sessionId: session.id, email } })
+        await db.session.update({
+          where: { id: session.id },
+          data: { revisionTeacher: { increment: 1 } },
+        })
+        return NextResponse.json({ ok: true, email })
       }
 
       // v2.7.0 — Sauvegarde v2 AVEC secrets (jetons + PIN haché) pour la
@@ -1357,7 +1487,7 @@ async function runManageAction(
         // leurs codes de reprise), réponses, réclamations, évaluations.
         // À télécharger avant chaque mise à jour de l'application.
         // Les secrets (PIN haché, jetons enseignant/étudiants) sont exclus.
-        const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals, saiItems, saiResponses] =
+        const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals, saiItems, saiResponses, collaborators] =
           await Promise.all([
             db.team.findMany({
               where: { sessionId: session.id },
@@ -1408,6 +1538,13 @@ async function runManageAction(
               where: { student: { sessionId: session.id } },
               orderBy: { createdAt: 'asc' },
             }),
+            // v3.2.0 : invitations de partage (emails seuls, aucun secret)
+            // — une sauvegarde restaurée conserve son partage.
+            db.sessionCollaborator.findMany({
+              where: { sessionId: session.id },
+              orderBy: { addedAt: 'asc' },
+              select: { email: true, addedAt: true },
+            }),
           ])
         return NextResponse.json({
           format: 'tbl-live-sauvegarde',
@@ -1433,6 +1570,8 @@ async function runManageAction(
           // v2.6.0 : questionnaire TBL-SAI — items et réponses
           saiItems,
           saiResponses,
+          // v3.2.0 : partage (emails institutionnels, aucun secret)
+          collaborators,
         })
       }
 

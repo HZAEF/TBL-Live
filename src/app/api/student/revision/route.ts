@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { extractToken } from '@/lib/tbl'
 import { recordRequest } from '@/lib/metrics'
+import { rateLimit, RATE_REVISION } from '@/lib/rate-limit'
 
 // ============================================================
 // TBL Live v3.0.0 — GET /api/student/revision : sondage ALLÉGÉ
@@ -31,6 +32,20 @@ export async function GET(req: NextRequest) {
     const token = extractToken(req)
     if (!token) {
       return NextResponse.json({ error: 'Jeton manquant.' }, { status: 400 })
+    }
+    // v3.2.0 — garde-fou de débit (audit point n°5) : un client
+    // défaillant qui bouclerait trop vite est ralenti par 429 +
+    // Retry-After ; le client sain (sondage 2 s + rafraîchissements
+    // forcés) reste à mi-seau. Le backoff existant fait le reste.
+    const verdict = rateLimit(`rev:${token}`, RATE_REVISION)
+    if (!verdict.ok) {
+      recordRequest('revision', Date.now() - started, false)
+      const res = NextResponse.json(
+        { error: 'Trop de requêtes — ralentissez, la séance continue.' },
+        { status: 429 }
+      )
+      res.headers.set('Retry-After', String(verdict.retryAfterSec))
+      return res
     }
     const student = await db.student.findUnique({
       where: { token },

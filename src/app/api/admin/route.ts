@@ -10,6 +10,8 @@ import { generateTeacherPassword, normalizeTeacherEmail, isPlausibleEmail, check
 import { sanitizeTheme, parseStoredTheme } from '@/lib/theme'
 import { parseAccountsFile, TableReadError } from '@/lib/xlsx-reader'
 import { perfSnapshot } from '@/lib/metrics'
+import { purgeStudentData } from '@/lib/session-lifecycle'
+import { storageOverview, purgeSelectedSessions, purgeOlderThan } from '@/lib/storage'
 
 // ============================================================
 // TBL Live v2.9.0 — Espace administrateur (/admin)
@@ -145,6 +147,8 @@ interface AdminAction {
   theme?: unknown
   // v3.0.0 — signalements par TBL
   enabled?: unknown
+  // v3.2.0 — purge par période (mois)
+  months?: unknown
 }
 
 export async function POST(req: NextRequest) {
@@ -539,6 +543,48 @@ export async function POST(req: NextRequest) {
       // ----- v3.0.0 : instrumentation en direct -----
       case 'perf': {
         return NextResponse.json({ ok: true, perf: perfSnapshot() })
+      }
+
+      // ===== v3.2.0 : ESPACE STOCKAGE & PURGE =====
+      //
+      // « L'administrateur doit avoir une idée du volume généré et
+      // stocké dans chaque séance TBL, et un mécanisme de purge par
+      // période (données de plus de N mois) et par séance (sélection
+      // multiple) — sans toucher aux séances (questions) qui restent
+      // sur le compte des enseignants. »
+      //
+      // storage       : photographie du volume (par séance + total +
+      //                 moteur + pool de connexions — audit point n°2) ;
+      // purge_period  : purge des données d'étudiants de toutes les
+      //                 séances de plus de N mois (garde-fou : jamais
+      //                 une séance active, jamais une séance déjà
+      //                 purgée — idempotent) ;
+      // purge_sessions: purge des séances SÉLECTIONNÉES (mêmes
+      //                 garde-fous, refus explicite des séances actives).
+      case 'storage': {
+        const overview = await storageOverview()
+        return NextResponse.json({ ok: true, ...overview })
+      }
+
+      case 'purge_period': {
+        const months = Number(body?.months)
+        if (!Number.isInteger(months) || months < 1 || months > 60) {
+          return NextResponse.json(
+            { error: 'Période invalide : entre 1 et 60 mois.' },
+            { status: 400 }
+          )
+        }
+        const outcome = await purgeOlderThan(months, purgeStudentData)
+        return NextResponse.json({ ok: true, months, ...outcome })
+      }
+
+      case 'purge_sessions': {
+        const codes = readCodes(body?.codes)
+        if (codes.length === 0) {
+          return NextResponse.json({ error: 'Aucune séance sélectionnée.' }, { status: 400 })
+        }
+        const outcome = await purgeSelectedSessions(codes, purgeStudentData)
+        return NextResponse.json({ ok: true, ...outcome })
       }
 
       // ===== ESPACE COMPTES ENSEIGNANTS (v3.0.0) =====

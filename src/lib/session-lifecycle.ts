@@ -76,9 +76,14 @@ export async function applyLifecycle(session: Session): Promise<Session | null> 
  * Purge des données produites par les étudiants :
  *  - SUPPRIMÉ : étudiants (noms + jetons + codes de reprise), réponses
  *    iRAT et tRAT, réponses d'application, réclamations, évaluations
- *    par les pairs ;
- *  - CONSERVÉ : la séance, ses QCM, ses cas cliniques, ses réglages et
- *    ses équipes (structure), pour consultation et duplication.
+ *    par les pairs, questionnaire, signalements et JOURNAL
+ *    D'ÉVÉNEMENTS (v3.2.0, audit point n°6 : le journal d'une séance
+ *    purgée n'a plus d'objet — le compteur eventSeq N'EST PAS remis à
+ *    zéro, les numéros restent strictement croissants) ;
+ *  - CONSERVÉ : la séance, ses QCM, ses cas cliniques, ses réglages,
+ *    ses équipes (structure) et son PARTAGE (v3.2.0 : les invitations
+ *    par email ne sont pas des données d'étudiants — la co-animation
+ *    survit à la purge), pour consultation et duplication.
  */
 export async function purgeStudentData(session: Session): Promise<Session> {
   // Les réponses iRAT et les évaluations par les pairs sont supprimées en
@@ -88,6 +93,9 @@ export async function purgeStudentData(session: Session): Promise<Session> {
   await db.answer.deleteMany({ where: { question: { sessionId: session.id } } })
   await db.appAnswer.deleteMany({ where: { question: { sessionId: session.id } } })
   await db.appeal.deleteMany({ where: { sessionId: session.id } })
+  // v3.2.0 : journal d'événements (plus aucune donnée étudiante après la
+  // purge → les événements qui les décrivent n'ont plus de sens).
+  await db.sessionEvent.deleteMany({ where: { sessionId: session.id } })
   // Les équipes sont conservées (structure de la séance) mais remises à
   // zéro pour le suivi des réclamations.
   await db.team.updateMany({

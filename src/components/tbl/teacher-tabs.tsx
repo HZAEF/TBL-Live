@@ -13,7 +13,9 @@ import {
   RefreshCw,
   Save,
   ShieldAlert,
+  Share2,
   Trash2,
+  UserPlus,
   Users,
   Wand2,
   Wifi,
@@ -1695,6 +1697,190 @@ export function writeSyncConfig(code: string, cfg: SyncConfig | null) {
   }
 }
 
+// ---------------- v3.2.0 : partage de la séance ----------------
+
+/**
+ * Carte « Partage de la séance » (onglet Configurations) : inviter des
+ * collègues par leur email institutionnel — la séance apparaît dans
+ * « Mes séances » de leur compte, ouverture sans PIN, co-pilotage du
+ * même tableau de bord. La liste suit la séance (sync locale ↔ en
+ * ligne, sauvegarde .json) : l'email est l'identifiant stable.
+ */
+function ShareCard({
+  data,
+  token,
+  refresh,
+}: {
+  data: DashboardDTO
+  token: string
+  refresh: () => Promise<unknown>
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const collaborators = data.session.collaborators ?? []
+  const code = data.session.code
+
+  const invite = async () => {
+    if (busy || !email.trim()) return
+    setBusy(true)
+    try {
+      const res = await api<{
+        ok: boolean
+        duplicate?: boolean
+        email: string
+        hasAccount: boolean
+        name: string | null
+      }>(`/api/sessions/${code}/manage`, {
+        method: 'POST',
+        body: JSON.stringify({ token, action: 'share_session', email: email.trim() }),
+      })
+      if (res.duplicate) {
+        toast({ title: t('Déjà invité'), description: t('Cet enseignant a déjà accès à la séance.') })
+      } else if (!res.hasAccount) {
+        toast({
+          title: t('Invitation enregistrée'),
+          description: t(
+            'Aucun compte enseignant n’existe encore avec cet email : prévenez votre administrateur pour qu’il le crée — la séance apparaîtra alors dans ses « Mes séances ».'
+          ),
+        })
+      } else {
+        toast({
+          title: t('Invitation envoyée'),
+          description: t('{name} retrouve la séance dans « Mes séances » de son compte.', {
+            name: res.name ?? res.email,
+          }),
+        })
+      }
+      setEmail('')
+      await refresh()
+    } catch (e) {
+      toast({
+        title: t('Invitation impossible'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
+        variant: 'destructive',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const revoke = async (target: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await api(`/api/sessions/${code}/manage`, {
+        method: 'POST',
+        body: JSON.stringify({ token, action: 'unshare_session', email: target }),
+      })
+      toast({
+        title: t('Partage retiré'),
+        description: t('{email} ne verra plus la séance dans « Mes séances ».', { email: target }),
+      })
+      await refresh()
+    } catch (e) {
+      toast({
+        title: t('Retrait impossible'),
+        description: e instanceof Error ? e.message : t('Erreur inconnue.'),
+        variant: 'destructive',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">
+      <div>
+        <p className="flex items-center gap-1.5 text-sm font-bold text-stone-900">
+          <Share2 className="h-4 w-4 text-emerald-600" />
+          {t('Partage de la séance')}
+        </p>
+        <p className="mt-0.5 text-xs leading-relaxed text-stone-500">
+          {t(
+            'Invitez d’autres enseignants par leur email institutionnel : la séance s’ajoute dans leurs « Mes séances », ouverture sans PIN, même tableau de bord — idéal pour animer la séance à plusieurs.'
+          )}
+        </p>
+      </div>
+
+      {data.session.owner && (
+        <p className="rounded-xl bg-stone-50 px-3 py-2 text-xs text-stone-600">
+          {t('Propriétaire :')} <b>{data.session.owner.name}</b>
+          <span className="text-stone-400"> ({data.session.owner.email})</span>
+        </p>
+      )}
+
+      {collaborators.length > 0 && (
+        <ul className="space-y-1.5">
+          {collaborators.map((c) => (
+            <li
+              key={c.email}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-stone-200 px-3 py-2"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-stone-800">
+                  {c.name ?? c.email}
+                  {c.name && <span className="ml-2 text-xs text-stone-400">{c.email}</span>}
+                </p>
+                <p className="text-[11px]">
+                  {c.hasAccount ? (
+                    <span className="text-emerald-600">{t('Compte actif')}</span>
+                  ) : (
+                    <span className="text-amber-600">
+                      {t('Compte inexistant — prévenez l’administrateur')}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-stone-400 hover:bg-red-50 hover:text-red-600"
+                disabled={busy}
+                onClick={() => void revoke(c.email)}
+              >
+                <X className="mr-0.5 h-3.5 w-3.5" />
+                {t('Retirer')}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+        <div>
+          <Label htmlFor="share-email">{t('Email institutionnel')}</Label>
+          <Input
+            id="share-email"
+            type="email"
+            inputMode="email"
+            autoComplete="off"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="prenom.nom@etablissement"
+            className="mt-1.5 h-11"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                void invite()
+              }
+            }}
+          />
+        </div>
+        <Button
+          className="h-11 bg-emerald-600 hover:bg-emerald-700"
+          disabled={busy || email.trim().length < 5}
+          onClick={() => void invite()}
+        >
+          {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <UserPlus className="mr-1 h-4 w-4" />}
+          {t('Inviter')}
+        </Button>
+      </div>
+    </section>
+  )
+}
+
 export function ConfigurationsTab({
   data,
   manage,
@@ -1902,6 +2088,9 @@ export function ConfigurationsTab({
           </div>
         </div>
       </section>
+
+      {/* ---- v3.2.0 : partage de la séance avec d'autres enseignants ---- */}
+      <ShareCard data={data} token={token} refresh={refresh} />
 
       {/* ---- Exclure un étudiant ---- */}
       <section className="space-y-3 rounded-2xl border border-stone-200 bg-white p-4">

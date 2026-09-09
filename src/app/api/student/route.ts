@@ -4,6 +4,7 @@ import { extractToken } from '@/lib/tbl'
 import { computeRankFor } from '@/lib/grades'
 import { readRevParam } from '@/lib/revision'
 import { recordRequest } from '@/lib/metrics'
+import { rateLimit, RATE_STUDENT } from '@/lib/rate-limit'
 import {
   getBaseState,
   getFinals,
@@ -38,6 +39,20 @@ export async function GET(req: NextRequest) {
     const token = extractToken(req)
     if (!token) {
       return NextResponse.json({ error: 'Jeton manquant.' }, { status: 400 })
+    }
+    // v3.2.0 — garde-fou de débit (audit point n°5) : l'état complet
+    // n'est tiré qu'aux changements de numéro — un client sain reste
+    // loin du plafond ; un client défaillant reçoit 429 + Retry-After
+    // et son backoff double son délai tout seul.
+    const verdict = rateLimit(`stu:${token}`, RATE_STUDENT)
+    if (!verdict.ok) {
+      recordRequest('student', Date.now() - started, false)
+      const res = NextResponse.json(
+        { error: 'Trop de requêtes — ralentissez, la séance continue.' },
+        { status: 429 }
+      )
+      res.headers.set('Retry-After', String(verdict.retryAfterSec))
+      return res
     }
     tokenForMetrics = token
     const student = await db.student.findUnique({

@@ -134,6 +134,19 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<SessionEventType>([
   'appeal_decision',
 ])
 
+// v3.2.0 — ROTATION DU JOURNAL (audit point n°6) : une séance TBL très
+// active (150 étudiants, réponses + retries + événements de phase)
+// produit quelques milliers d'événements (~100 octets chacun). Pour
+// éviter qu'une séance à très longue vie ne fasse grossir la table
+// sans fin, le journal garde au plus EVENT_KEEP événements PAR SÉANCE :
+// tous les TRIM_EVERY insertions, les plus anciens sont supprimés.
+// Le compteur eventSeq N'EST JAMAIS remis à zéro (numéros strictement
+// croissants → les consommateurs delta ne se trompent jamais de curseur) ;
+// les événements supprimés sont les plus anciens, déjà consommés de
+// longtemps. 5000 événements couvrent plusieurs heures de séance.
+const EVENT_KEEP = 5000
+const TRIM_EVERY = 500
+
 /** Lit l'origine déclarée d'une requête (en-tête x-tbl-origin ;
  *  'local' par défaut — le serveur qui traite est l'origine).
  *  Utilisé par les routes : const origin = eventOriginFromHeader(
@@ -180,6 +193,19 @@ export async function recordSessionEvent(
         origin: origin === 'online' ? 'online' : 'local',
       },
     })
+    // v3.2.0 — rotation (audit n°6) : tous les TRIM_EVERY événements,
+    // on supprime les plus anciens au-delà de EVENT_KEEP. Appelé sous
+    // le verrou d'écriture, index (sessionId, sequence) → rapide ;
+    // best-effort : un échec de nettoyage ne bloque JAMAIS la séance.
+    if (updated.eventSeq % TRIM_EVERY === 0) {
+      try {
+        await db.sessionEvent.deleteMany({
+          where: { sessionId, sequence: { lt: updated.eventSeq - EVENT_KEEP } },
+        })
+      } catch {
+        // nettoyage best-effort
+      }
+    }
   } catch {
     // journal best-effort : jamais un blocage pour l'étudiant
   }

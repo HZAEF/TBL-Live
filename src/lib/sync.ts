@@ -69,6 +69,12 @@ export interface BackupSessionCore {
    *  (absent des sauvegardes antérieures → non modifié à l'import,
    *  la valeur par défaut « désactivé » s'applique aux séances neuves). */
   reportsEnabled?: boolean
+  /** v3.2.0 : email institutionnel du propriétaire (absent des
+   *  sauvegardes antérieures → null). Les ids de comptes DIFFÈRENT
+   *  entre l'instance locale et l'instance en ligne ; l'email est
+   *  l'identifiant stable — le miroir distant résout cet email en
+   * compte LOCAL pour que « Mes séances » fonctionne des deux côtés. */
+  ownerEmail?: string | null
 }
 
 export interface SyncBackup {
@@ -87,6 +93,10 @@ export interface SyncBackup {
   saiItems: unknown[]
   saiResponses: unknown[]
   alerts?: unknown[]
+  /** v3.2.0 : partage de la séance — [{ email, addedAt }]. La liste
+   *  des enseignants invités suit la séance d'une instance à l'autre
+   *  (et dans les sauvegardes .json) : l'invitation survit au miroir. */
+  collaborators?: unknown[]
   /** v2 uniquement — jamais exposé au navigateur. */
   secrets?: {
     sessionId: string
@@ -109,6 +119,7 @@ const MAX = {
   saiItems: 120,
   saiResponses: 30000,
   alerts: 8000,
+  collaborators: 40,
 }
 
 class BackupError extends Error {}
@@ -154,7 +165,7 @@ function dateOrNull(v: unknown): Date | null {
 /** Sauvegarde complète AVEC secrets (format v2, serveur ↔ serveur). */
 export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
   const sid = session.id
-  const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals, saiItems, saiResponses, alerts] =
+  const [teams, students, questions, cases, answers, appeals, appAnswers, peerEvals, saiItems, saiResponses, alerts, collaborators, owner] =
     await Promise.all([
       db.team.findMany({ where: { sessionId: sid }, orderBy: { number: 'asc' } }),
       db.student.findMany({ where: { sessionId: sid }, orderBy: { createdAt: 'asc' } }),
@@ -173,6 +184,12 @@ export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
       }),
       db.saiResponse.findMany({ where: { student: { sessionId: sid } }, orderBy: { createdAt: 'asc' } }),
       db.alertEvent.findMany({ where: { student: { sessionId: sid } }, orderBy: { createdAt: 'asc' } }),
+      // v3.2.0 : partage — invitations par email (identifiant stable
+      // inter-instances) + propriétaire (résolu en email).
+      db.sessionCollaborator.findMany({ where: { sessionId: sid }, orderBy: { addedAt: 'asc' } }),
+      session.teacherId
+        ? db.teacherAccount.findUnique({ where: { id: session.teacherId }, select: { email: true } })
+        : Promise.resolve(null),
     ])
   return {
     format: 'tbl-live-sync',
@@ -198,6 +215,11 @@ export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
       // (l'administrateur peut les réactiver TBL par TBL — le réglage
       // suit la séance sur les deux versions).
       reportsEnabled: session.reportsEnabled,
+      // v3.2.0 : email du propriétaire — l'identifiant stable entre
+      // instances. Le miroir distant le résout en compte LOCAL à
+      // l'arrivée : « Mes séances » du propriétaire fonctionne ainsi
+      // sur la version en ligne ET sur la version locale.
+      ownerEmail: owner?.email ?? null,
     },
     secrets: {
       sessionId: session.id,
@@ -311,6 +333,14 @@ export async function buildSyncBackup(session: Session): Promise<SyncBackup> {
       kind: a.kind,
       phase: a.phase,
       createdAt: a.createdAt.toISOString(),
+    })),
+    // v3.2.0 : invitations de partage (emails institutionnels) — la
+    // liste suit la séance partout : miroir en ligne, sauvegarde .json,
+    // restauration. Aucun secret : les emails ne suffisent pas à
+    // ouvrir la séance (le compte + mot de passe restent exigés).
+    collaborators: collaborators.map((c) => ({
+      email: c.email,
+      addedAt: c.addedAt.toISOString(),
     })),
   }
 }
@@ -534,6 +564,24 @@ export async function replaceSessionFromBackup(
       createdAt: date(o.createdAt),
     }
   })
+  // v3.2.0 — Partage : invitations par email. Tolérant par construction
+  // (un email invalide dans une sauvegarde ancienne est ignoré, jamais
+  // un échec d'import), dédupliqué (la contrainte unique exigerait de
+  // toute façon l'unicité).
+  const seenCollab = new Set<string>()
+  const collaborators = arr(b.collaborators, MAX.collaborators)
+    .map((c) => {
+      const o = c as Record<string, unknown>
+      const email = typeof o.email === 'string' ? o.email.trim().toLowerCase() : ''
+      if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(email) || email.length > 120) return null
+      return { email, addedAt: date(o.addedAt) }
+    })
+    .filter((c): c is { email: string; addedAt: Date } => {
+      if (c === null) return false
+      if (seenCollab.has(c.email)) return false
+      seenCollab.add(c.email)
+      return true
+    })
 
   // Cohérence des références (une sauvegarde produite par l'application
   // est toujours cohérente ; un fichier altéré, lui, est refusé ici).
@@ -561,6 +609,30 @@ export async function replaceSessionFromBackup(
   const sessionId = isV2 ? (sid as string) : existing ? existing.id : randomToken()
   const finalToken = isV2 ? (teacherToken as string) : existing ? existing.teacherToken : randomToken()
   const finalPin = isV2 ? (teacherPin as string) : (hashedPin as string)
+
+  // v3.2.0 — RÉSOLUTION DU PROPRIÉTAIRE : les ids de comptes DIFFÈRENT
+  // d'une instance à l'autre (locale / en ligne), l'email est l'identi-
+  // fiant stable transporté par la sauvegarde.
+  //  - teacherId explicite (téléversement navigateur) → il prime ;
+  //  - sinon (sync machine ↔ machine) : ownerEmail du fichier résolu
+  //    contre les comptes de CETTE instance → le miroir appartient au
+  //    même enseignant (même email) → « Mes séances » fonctionne des
+  //    deux côtés ; aucun compte correspondant → miroir sans proprié-
+  //    taire (comportement antérieur : réclamation par PIN possible).
+  let finalTeacherId: string | null = null
+  if (typeof teacherId === 'string' && teacherId.length > 0) {
+    finalTeacherId = teacherId
+  } else {
+    const ownerEmail =
+      typeof b.session?.ownerEmail === 'string' ? b.session.ownerEmail.trim().toLowerCase() : ''
+    if (ownerEmail) {
+      const owner = await db.teacherAccount.findUnique({
+        where: { email: ownerEmail },
+        select: { id: true },
+      })
+      finalTeacherId = owner?.id ?? null
+    }
+  }
 
   return db.$transaction(async (tx) => {
     if (existing) {
@@ -593,7 +665,8 @@ export async function replaceSessionFromBackup(
         // signalements (transportés par la synchronisation, l'adminis-
         // trateur peut les activer TBL par TBL sur l'une ou l'autre
         // version). Absent du fichier → désactivés (défaut v3.0).
-        teacherId: teacherId ?? null,
+        // v3.2.0 : résolution par EMAIL (voir plus haut).
+        teacherId: finalTeacherId,
         reportsEnabled: b.session?.reportsEnabled === true,
       },
     })
@@ -738,6 +811,16 @@ export async function replaceSessionFromBackup(
           createdAt: a.createdAt,
         })),
       })
+    // v3.2.0 — invitations de partage : recréées à l'identique (email,
+    // date d'ajout) — le miroir/la restauration porte le même partage.
+    if (collaborators.length > 0)
+      await tx.sessionCollaborator.createMany({
+        data: collaborators.map((c) => ({
+          sessionId,
+          email: c.email,
+          addedAt: c.addedAt,
+        })),
+      })
     return { session: sessionRow, restored: !!existing }
   })
 }
@@ -757,6 +840,10 @@ export interface MergeSummary {
   alertsInserted: number
   casesOpened: number
   teamsInserted: number
+  // v3.2.0 : invitations de partage distantes ajoutées localement
+  // (union par email — un retrait de partage ne se propage QUE par le
+  // push miroir qui suit, jamais par le pull).
+  collaboratorsInserted: number
   sessionUpdated: boolean
 }
 
@@ -788,6 +875,7 @@ export async function mergePullIntoLocal(session: Session, backupRaw: unknown): 
     alertsInserted: 0,
     casesOpened: 0,
     teamsInserted: 0,
+    collaboratorsInserted: 0,
     sessionUpdated: false,
   }
   const sid = session.id
@@ -1055,6 +1143,31 @@ export async function mergePullIntoLocal(session: Session, backupRaw: unknown): 
         },
       })
       summary.alertsInserted += 1
+    } catch {
+      // concurrence résiduelle : ignorée (aucun doublon)
+    }
+  }
+
+  // ---- Partage (v3.2.0) : union par email, INSERT-ONLY ----
+  // Une invitation distante qui n'existe pas localement est ajoutée
+  // (le collègue invité sur l'autre instance voit la séance ici aussi).
+  // Un RETRAIT de partage ne se propage PAS par le pull (la fusion ne
+  // supprime jamais) : il se propage par le push miroir qui suit le
+  // pull — comportement identique aux autres données.
+  for (const raw of arr(b.collaborators, MAX.collaborators)) {
+    const o = raw as Record<string, unknown>
+    const email = typeof o.email === 'string' ? o.email.trim().toLowerCase() : ''
+    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(email) || email.length > 120) continue
+    const existing = await db.sessionCollaborator.findUnique({
+      where: { sessionId_email: { sessionId: sid, email } },
+      select: { id: true },
+    })
+    if (existing) continue
+    try {
+      await db.sessionCollaborator.create({
+        data: { sessionId: sid, email, addedAt: dateOrNull(o.addedAt) ?? new Date() },
+      })
+      summary.collaboratorsInserted += 1
     } catch {
       // concurrence résiduelle : ignorée (aucun doublon)
     }

@@ -4,6 +4,14 @@ import { db } from '@/lib/db'
 import { getSessionByCode, randomToken, randomRecoveryCode, normalizeName } from '@/lib/tbl'
 import { bumpRevisions } from '@/lib/revision'
 import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
+import { rateLimit, RATE_JOIN } from '@/lib/rate-limit'
+
+/** Adresse IP du client (x-forwarded-proxy/Vercel/Caddy, sinon socket). */
+function clientIp(req: NextRequest): string {
+  const fwd = req.headers.get('x-forwarded-for')
+  if (fwd) return fwd.split(',')[0].trim()
+  return req.headers.get('x-real-ip') ?? 'local'
+}
 
 // POST /api/join — l'étudiant rejoint une séance
 //
@@ -20,6 +28,21 @@ import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/l
 // — parfaitement compatible avec la reprise par nom + code.
 async function doPOST(req: NextRequest) {
   try {
+    // v3.2.0 — garde-fou de débit par IP (audit point n°5) : la rafale
+    // de début de séance est NORMALE (le test de charge valide 150
+    // joins SIMULTANÉS depuis une même IP) → plafond volontairement
+    // très haut (burst 250, 600/min). Seules les vraies boucles
+    // défaillantes (un client qui re-poste /api/join en boucle) sont
+    // freinées — la rafale d'une classe entière passe toujours.
+    const verdict = rateLimit(`join:${clientIp(req)}`, RATE_JOIN)
+    if (!verdict.ok) {
+      const res = NextResponse.json(
+        { error: 'Trop de tentatives — patientez quelques secondes puis réessayez.' },
+        { status: 429 }
+      )
+      res.headers.set('Retry-After', String(verdict.retryAfterSec))
+      return res
+    }
     const body = await req.json().catch(() => null)
     const code = typeof body?.code === 'string' ? body.code : ''
     const name = typeof body?.name === 'string' ? body.name.trim() : ''

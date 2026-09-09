@@ -83,6 +83,11 @@ export interface DashboardDTO {
     /** Date de purge automatique des données étudiantes (rétention 4 mois,
      * null = données encore présentes). QCM et cas cliniques conservés. */
     dataPurgedAt: string | null
+    /** v3.2.0 : enseignants invités à co-piloter cette séance (partage
+     * par email institutionnel — visible dans l'onglet Configurations). */
+    collaborators?: { email: string; addedAt: string; hasAccount: boolean; name: string | null }[]
+    /** v3.2.0 : compte propriétaire (null = séance sans propriétaire). */
+    owner?: { email: string; name: string } | null
   }
   questions: QuestionDTO[]
   cases: CaseDTO[]

@@ -34,9 +34,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
+  Database,
   Dices,
+  Eraser,
   KeyRound,
   Loader2,
   LogOut,
@@ -110,6 +113,48 @@ interface AdminAccountRow {
   forgotPending: boolean
   forgotPasswordAt: string | null
   createdAt: string
+}
+
+/** v3.2.0 — ligne de volume par séance (espace Stockage). */
+interface StorageRow {
+  code: string
+  title: string
+  status: string
+  createdAt: string
+  deletedAt: string | null
+  dataPurgedAt: string | null
+  phaseStartedAt: string
+  teacher: { firstName: string; lastName: string; email: string } | null
+  students: number
+  teams: number
+  questions: number
+  cases: number
+  answers: number
+  appeals: number
+  appAnswers: number
+  peerEvals: number
+  saiItems: number
+  saiResponses: number
+  alerts: number
+  events: number
+  bytes: number
+}
+
+/** v3.2.0 — réponse de l'action « storage ». */
+interface StorageOverviewRow {
+  engine: 'sqlite' | 'postgres' | 'inconnu'
+  pooled: boolean
+  hasDirectUrl: boolean
+  dbBytes: number | null
+  sessions: StorageRow[]
+  totalBytes: number
+  totalCount: number
+}
+
+/** v3.2.0 — résultat d'une purge (période ou sélection). */
+interface PurgeResult {
+  purged: string[]
+  skipped: { code: string; reason: string }[]
 }
 
 const SYNC_CHOICES = [
@@ -410,6 +455,11 @@ function AdminMain({
             <Palette className="mr-1 h-3.5 w-3.5" />
             Apparence
           </TabsTrigger>
+          {/* v3.2.0 — volume de stockage et purge des données anciennes. */}
+          <TabsTrigger value="storage" className="flex-1 px-3 py-2 sm:flex-none">
+            <Database className="mr-1 h-3.5 w-3.5" />
+            Stockage
+          </TabsTrigger>
           <TabsTrigger value="params" className="flex-1 px-3 py-2 sm:flex-none">
             Paramètres
           </TabsTrigger>
@@ -434,6 +484,9 @@ function AdminMain({
         </TabsContent>
         <TabsContent value="appearance" className="mt-4">
           <AppearanceTab theme={state.theme ?? {}} call={call} />
+        </TabsContent>
+        <TabsContent value="storage" className="mt-4">
+          <StorageTab call={call} />
         </TabsContent>
         <TabsContent value="params" className="mt-4">
           <ParamsTab state={state} call={call} />
@@ -2123,6 +2176,339 @@ function AppearanceTab({
             </span>
           )}
         </div>
+      </section>
+    </div>
+  )
+}
+
+// ---------------- v3.2.0 : Stockage & purge ----------------
+
+/** Octets lisibles (Ko/Mo/Go, virgule française). */
+function fmtBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${Math.round(bytes)} o`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1).replace('.', ',')} Ko`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1).replace('.', ',')} Mo`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2).replace('.', ',')} Go`
+}
+
+const PURGE_PERIODS = [
+  { months: 1, label: 'plus de 1 mois' },
+  { months: 2, label: 'plus de 2 mois' },
+  { months: 3, label: 'plus de 3 mois' },
+  { months: 6, label: 'plus de 6 mois' },
+  { months: 12, label: 'plus de 12 mois' },
+]
+
+function StorageTab({ call }: { call: CallFn }) {
+  const [data, setData] = useState<StorageOverviewRow | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [months, setMonths] = useState(3)
+  const [confirmSel, setConfirmSel] = useState(false)
+  const [confirmPeriod, setConfirmPeriod] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [lastResult, setLastResult] = useState<(PurgeResult & { freed?: string }) | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const res = await call({ action: 'storage' })
+    if (res) setData(res as unknown as StorageOverviewRow)
+    setLoading(false)
+  }, [call])
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const sorted = useMemo(
+    () => [...(data?.sessions ?? [])].sort((a, b) => b.bytes - a.bytes),
+    [data]
+  )
+  const toggle = (code: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(code)) next.delete(code)
+      else next.add(code)
+      return next
+    })
+  }
+  const selectedBytes = sorted
+    .filter((s) => checked.has(s.code))
+    .reduce((sum, s) => sum + s.bytes, 0)
+
+  const runPurge = async (action: 'purge_sessions' | 'purge_period', payload: Record<string, unknown>, label: string) => {
+    setBusy(true)
+    try {
+      const res = await api<PurgeResult>('/api/admin', {
+        method: 'POST',
+        body: JSON.stringify({ action, ...payload }),
+      })
+      setLastResult(res)
+      setConfirmSel(false)
+      setConfirmPeriod(false)
+      setChecked(new Set())
+      if (res.purged.length > 0) {
+        await load()
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (e) {
+      window.alert(`${label} impossible : ${e instanceof Error ? e.message : 'erreur inconnue'}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* ---- Photographie du stockage ---- */}
+      <section className="rounded-2xl border border-stone-200 bg-white p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-bold text-stone-900">Volume de stockage</p>
+            <p className="mt-0.5 text-xs text-stone-500">
+              Données générées par chaque séance TBL (réponses, réclamations, événements…). Les QCM
+              et cas cliniques des enseignants ne sont jamais comptés comme « volumineux » : ils
+              restent sur leurs comptes, même après purge.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" className="h-9 border-stone-300" disabled={loading} onClick={() => void load()}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Actualiser
+          </Button>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-xl bg-stone-50 p-3">
+            <p className="text-2xl font-bold text-stone-800">{fmtBytes(data?.totalBytes)}</p>
+            <p className="text-xs text-stone-500">données de séances ({data?.totalCount ?? '…'} séances)</p>
+          </div>
+          <div className="rounded-xl bg-stone-50 p-3">
+            <p className="text-2xl font-bold text-stone-800">{fmtBytes(data?.dbBytes)}</p>
+            <p className="text-xs text-stone-500">taille de la base</p>
+          </div>
+          <div className="rounded-xl bg-stone-50 p-3">
+            <p className="text-sm font-bold text-stone-800">
+              {data?.engine === 'sqlite' ? 'SQLite (local)' : data?.engine === 'postgres' ? 'PostgreSQL (en ligne)' : '—'}
+            </p>
+            <p className="text-xs text-stone-500">
+              {data?.engine === 'sqlite' ? 'base sur cet ordinateur' : data ? (data.pooled ? 'connexion poolée ✓' : 'connexion NON poolée') : ''}
+            </p>
+          </div>
+        </div>
+
+        {/* v3.2.0 (audit point n°2) : avertissement pooling Neon/Vercel. */}
+        {data?.engine === 'postgres' && !data.pooled && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              La connexion PostgreSQL ne semble pas passer par le pooler (PgBouncer). Sur Vercel +
+              Neon, utilisez l&apos;adresse « pooled » (hôte <b>-pooler</b>) pour DATABASE_URL pour
+              éviter l&apos;épuisement des connexions avec 150 étudiants. Vérifiez la variable dans
+              Vercel → Settings → Environment Variables (aucune manipulation ici : c&apos;est le
+              réglage du déploiement).
+            </span>
+          </div>
+        )}
+
+        {lastResult && (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-relaxed text-emerald-900">
+            <p className="font-semibold">
+              Purge terminée — {lastResult.purged.length} séance(s) purgée(s).
+            </p>
+            {lastResult.skipped.length > 0 && (
+              <p className="mt-1 text-xs text-emerald-800">
+                Ignorées : {lastResult.skipped.map((s) => `${s.code} (${s.reason})`).join(' · ')}
+              </p>
+            )}
+            <p className="mt-1 text-xs text-emerald-700">
+              Les QCM, cas cliniques et équipes de ces séances sont conservés — seules les données
+              produites par les étudiants ont été effacées.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* ---- Purge par période ---- */}
+      <section className="rounded-2xl border border-stone-200 bg-white p-4">
+        <p className="text-sm font-bold text-stone-900">Purge par période</p>
+        <p className="mt-0.5 text-xs text-stone-500">
+          Efface les données étudiantes de toutes les séances anciennes — les séances actives
+          (phase démarrée récemment) et déjà purgées sont automatiquement protégées.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select
+            value={months}
+            onChange={(e) => {
+              setMonths(Number(e.target.value))
+              setConfirmPeriod(false)
+            }}
+            className="h-10 rounded-xl border border-stone-300 bg-white px-3 text-sm text-stone-800"
+          >
+            {PURGE_PERIODS.map((p) => (
+              <option key={p.months} value={p.months}>
+                Données {p.label}
+              </option>
+            ))}
+          </select>
+          {confirmPeriod ? (
+            <>
+              <Button
+                size="sm"
+                className="h-10 bg-red-600 hover:bg-red-700"
+                disabled={busy}
+                onClick={() => void runPurge('purge_period', { months }, 'Purge par période')}
+              >
+                {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eraser className="mr-1 h-4 w-4" />}
+                Confirmer la purge
+              </Button>
+              <Button size="sm" variant="ghost" className="h-10" disabled={busy} onClick={() => setConfirmPeriod(false)}>
+                Annuler
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-10 border-stone-300"
+              disabled={busy || loading}
+              onClick={() => setConfirmPeriod(true)}
+            >
+              <Eraser className="mr-1 h-4 w-4" />
+              Purger les données anciennes
+            </Button>
+          )}
+        </div>
+        {confirmPeriod && (
+          <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+            Confirmation requise : les noms des étudiants, leurs réponses, réclamations, évaluations
+            par les pairs, questionnaire et journal d&apos;événements des séances de plus de{' '}
+            <b>{months} mois</b> seront effacés définitivement. Les QCM et cas cliniques restent sur
+            le compte des enseignants (consultation et duplication possibles).
+          </p>
+        )}
+      </section>
+
+      {/* ---- Volume par séance + purge par sélection ---- */}
+      <section className="rounded-2xl border border-stone-200 bg-white p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-bold text-stone-900">Volume par séance</p>
+          {checked.size > 0 && (
+            <div className="flex items-center gap-2">
+              {confirmSel ? (
+                <>
+                  <Button
+                    size="sm"
+                    className="h-9 bg-red-600 hover:bg-red-700"
+                    disabled={busy}
+                    onClick={() => void runPurge('purge_sessions', { codes: [...checked] }, 'Purge des séances sélectionnées')}
+                  >
+                    {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eraser className="mr-1 h-4 w-4" />}
+                    Confirmer ({checked.size})
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-9" disabled={busy} onClick={() => setConfirmSel(false)}>
+                    Annuler
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 border-red-300 text-red-700 hover:bg-red-50"
+                  disabled={busy}
+                  onClick={() => setConfirmSel(true)}
+                >
+                  <Eraser className="mr-1 h-4 w-4" />
+                  Purger les données des séances sélectionnées (~{fmtBytes(selectedBytes)})
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="flex h-24 items-center justify-center gap-2 text-sm text-stone-400">
+            <Loader2 className="h-4 w-4 animate-spin" /> Mesure du volume…
+          </div>
+        ) : sorted.length === 0 ? (
+          <p className="rounded-xl bg-stone-50 px-3 py-4 text-sm text-stone-500">
+            Aucune séance dans la base pour l&apos;instant.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs text-stone-500">
+                  <th className="w-8 py-2"></th>
+                  <th className="py-2 pr-3">Séance</th>
+                  <th className="py-2 pr-3">Créée le</th>
+                  <th className="py-2 pr-3 text-right">Étudiants</th>
+                  <th className="py-2 pr-3 text-right">Réponses</th>
+                  <th className="py-2 pr-3 text-right">Événements</th>
+                  <th className="py-2 pr-3 text-right">Volume</th>
+                  <th className="py-2 pr-3">État</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((s) => (
+                  <tr key={s.code} className="border-b border-stone-100 align-middle">
+                    <td className="py-2">
+                      <input
+                        type="checkbox"
+                        checked={checked.has(s.code)}
+                        onChange={() => toggle(s.code)}
+                        className="h-4 w-4 accent-red-600"
+                        aria-label={`Sélectionner la séance ${s.code}`}
+                      />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-bold tracking-widest text-stone-600">{s.code}</span>
+                        <span className="max-w-56 truncate font-medium text-stone-800">{s.title}</span>
+                      </div>
+                      {s.teacher && (
+                        <p className="text-[11px] text-stone-400">
+                          {s.teacher.firstName} {s.teacher.lastName}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-xs text-stone-500">
+                      {new Date(s.createdAt).toLocaleDateString('fr-FR')}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-stone-700">{s.students}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-stone-700">{s.answers + s.appAnswers}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-stone-700">{s.events}</td>
+                    <td className="py-2 pr-3 text-right font-semibold tabular-nums text-stone-800">{fmtBytes(s.bytes)}</td>
+                    <td className="py-2 pr-3">
+                      {s.dataPurgedAt ? (
+                        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-500">
+                          Données purgées
+                        </span>
+                      ) : s.deletedAt ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                          Corbeille
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                          {STATUS_LABEL[s.status] ?? s.status}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="mt-3 text-xs leading-relaxed text-stone-500">
+          La purge d&apos;une séance efface uniquement les données produites par les étudiants
+          (noms, réponses, notes, réclamations, évaluations, questionnaire, signalements, journal).
+          La séance, ses QCM, ses cas cliniques et ses équipes restent sur le compte de
+          l&apos;enseignant — prêts à être consultés ou dupliqués pour une nouvelle classe. Une
+          séance dont la phase a démarré il y a moins de 48 h (cours en cours) est automatiquement
+          refusée.
+        </p>
       </section>
     </div>
   )

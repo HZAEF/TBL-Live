@@ -183,7 +183,8 @@ export function TeacherPanel({ onExit }: { onExit: () => void }) {
 
 /** v3.1.0 — Une séance de la liste « Mes séances » (côté serveur,
  *  rattachée au compte de l'enseignant — disponible sur tous ses
- *  appareils). */
+ *  appareils). v3.2.0 : role = « owner » (ma séance) ou
+ *  « collaborator » (partagée AVEC moi par un collègue). */
 interface RemoteSession {
   code: string
   title: string
@@ -192,6 +193,7 @@ interface RemoteSession {
   phaseStartedAt: string
   createdAt: string
   syncedAt: string | null
+  role?: 'owner' | 'collaborator'
 }
 
 function TeacherMenu({
@@ -369,11 +371,20 @@ function RemoteSessionRow({
   const { t } = useI18n()
   const phase = PHASE_INFO[session.status]
   const finished = session.status === 'finished'
+  const shared = session.role === 'collaborator'
   return (
     <div className="flex items-center justify-between gap-2 rounded-xl border border-stone-200 px-3 py-2.5 hover:bg-stone-50">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <p className="truncate text-sm font-semibold text-stone-800">{session.title}</p>
+          {shared && (
+            <span
+              className="shrink-0 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700"
+              title={t('Séance partagée par un collègue — vous la co-animez avec le même tableau de bord.')}
+            >
+              {t('Partagée')}
+            </span>
+          )}
           {finished ? (
             <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-500">
               {t('Terminée')}
