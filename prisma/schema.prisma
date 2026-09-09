@@ -93,8 +93,59 @@ model Session {
   peerEvals PeerEval[]
   // v2.6.0 : questionnaire de fin de séance (TBL-SAI) propre à la séance
   saiItems  SaiItem[]
+  // v3.2.0 — Partage de la séance avec d'autres enseignants : emails
+  // institutionnels ajoutés par le propriétaire (ou un gestionnaire du
+  // tableau de bord) depuis l'onglet Configurations. Chaque enseignant
+  // listé retrouve la séance dans « Mes séances » de son compte et peut
+  // la piloter (ouvrir sans PIN, dashboard complet). L'EMAIL est
+  // l'identifiant stable entre les instances locale et en ligne (les
+  // identifiants de comptes diffèrent des deux côtés) : la liste fait
+  // partie de la sauvegarde/synchronisation. Relation additive pure.
+  collaborators SessionCollaborator[]
   // v3.1.0 : journal d'événements (synchronisation delta future)
   events   SessionEvent[]
+}
+
+// ============================================================
+// v3.2.0 — Partage d'une séance TBL entre enseignants
+//
+// Le propriétaire (ou quiconque pilote le tableau de bord — le jeton
+// enseignant contrôle déjà toute la séance) invite des collègues par
+// leur email institutionnel : la séance apparaît alors dans
+// « Mes séances » du compte de chaque collègue, qui peut l'ouvrir
+// SANS PIN et co-piloter le déroulé (même tableau de bord, mêmes
+// actions). Pratique pour une séance TBL animée à plusieurs ou
+// co-signée par deux enseignants.
+//
+// CHOIX TECHNIQUES :
+//  - identifiant = EMAIL (pas l'id du compte) : les comptes sont
+//    propres à chaque instance (locale / en ligne), l'email est le
+//    seul identifiant stable → la liste survit à la synchronisation
+//    Internet ↔ réseau local et aux sauvegardes .json ;
+//  - une ligne par (séance, email) — contrainte unique : ajouter
+//    deux fois le même email est un no-op, jamais un doublon ;
+//  - le compte n'a pas besoin d'exister au moment du partage : si
+//    l'administrateur crée le compte plus tard (même email), la
+//    séance apparaît aussitôt dans « Mes séances » du nouvel compte ;
+//  - suppression d'un compte enseignant : RIEN à nettoyer (aucune
+//    clé étrangère vers le compte) — l'email devient simplement
+//    inactif jusqu'à re-création du compte ;
+//  - les données partagées ne sont PAS des données étudiantes :
+//    la purge des données d'une séance conserve le partage.
+// ============================================================
+model SessionCollaborator {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  // Email institutionnel (minuscules, normalisé à l'ajout).
+  email     String
+  addedAt   DateTime @default(now())
+
+  // Un partage par séance et par email.
+  @@unique([sessionId, email])
+  // « Quelles séances sont partagées avec cet email ? » (connexion
+  // enseignant → liste « Mes séances ») : index dédié.
+  @@index([email])
 }
 
 // ============================================================
