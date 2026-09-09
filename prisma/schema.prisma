@@ -62,6 +62,19 @@ model Session {
   // séparé, incrémenté AUSSI par les signalements anti-capture (visibles
   // par l'enseignant, sans intérêt pour les étudiants → pas de « revision »).
   revisionTeacher Int     @default(0)
+  // v3.0.0 — Compte enseignant propriétaire de la séance (null = séance
+  // importée par synchronisation ou créée avant la v3.0 : aucune perte,
+  // la séance reste pilotable par code + PIN). Colonne additive nullable.
+  teacherId      String?
+  teacher        TeacherAccount? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  // v3.0.0 — Signalements anti-capture : DÉSACTIVÉS par défaut (la
+  // professeure ne les juge plus pertinents) ; l'administrateur peut les
+  // réactiver TBL par TBL depuis /admin. Quand ils sont désactivés :
+  // rien n'est envoyé depuis les téléphones, rien n'est écrit en base,
+  // l'onglet « Signalements » disparaît du tableau de bord et la requête
+  // des événements n'est plus exécutée — la séance reste légère même
+  // avec 150 étudiants. Colonne additive, défaut false (désactivé).
+  reportsEnabled Boolean  @default(false)
   createdAt     DateTime @default(now())
 
   teams    Team[]
@@ -72,6 +85,44 @@ model Session {
   peerEvals PeerEval[]
   // v2.6.0 : questionnaire de fin de séance (TBL-SAI) propre à la séance
   saiItems  SaiItem[]
+}
+
+// ============================================================
+// v3.0.0 — Comptes enseignants (connexion obligatoire)
+// Seul un compte créé par l'administrateur peut ouvrir des séances
+// TBL (créer, reprendre, téléverser) : plus de séance ouverte par
+// n'importe qui. Connexion par email institutionnel + mot de passe
+// (généré par l'administrateur, modifiable par l'enseignant).
+//  - email : unique, minuscules, domaine institutionnel vérifié
+//    (@famso.u-sousse.tn par défaut, modifiable dans /admin) ;
+//  - passwordHash : bcrypt (comme le PIN et le mot de passe admin) ;
+//  - jeton de session : cookie HttpOnly, SEUL le hash SHA-256 est
+//    stocké en base (12 h), verrouillage 5 essais → 15 minutes ;
+//  - forgotPasswordAt : l'enseignant a signalé un mot de passe
+//    oublié → badge dans l'espace Comptes de l'administrateur, qui
+//    génère un nouveau mot de passe et le lui envoie par email.
+// NB : les comptes sont propres à CHAQUE instance (locale et en
+// ligne) — l'administrateur les recrée où il veut, le mot de passe
+// peut être identique des deux côtés.
+// ============================================================
+model TeacherAccount {
+  id           String    @id @default(cuid())
+  firstName    String
+  lastName     String
+  email        String    @unique
+  passwordHash String
+  loginAttempts Int      @default(0)
+  lockedUntil  DateTime?
+  tokenHash     String?
+  tokenExpiresAt DateTime?
+  // Mot de passe oublié : date de la demande (null = aucune) et date
+  // à laquelle l'administrateur l'a traitée (le badge disparaît).
+  forgotPasswordAt   DateTime?
+  forgotPasswordSeenAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions Session[]
 }
 
 // Cas clinique d'application : un énoncé + 3 à 5 QCU résolues en équipe.
@@ -101,6 +152,15 @@ model Team {
   session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   name      String // "Équipe 1", ...
   number    Int
+  // v3.0.0 — Compteur de révision PROPRE À L'ÉQUIPE (sondage allégé
+  // par équipe) : une réponse tRAT ne concerne que les membres de
+  // l'équipe (carte à gratter visible par elle seule). Incrémenter
+  // la révision GLOBALE aurait forcé les 150 étudiants de la classe
+  // à re-télécharger l'état complet à CHAQUE réponse d'UNE équipe ;
+  // avec ce compteur, seuls les membres de l'équipe concernée
+  // renouvellent leur état — la tempête de requêtes des grosses
+  // classes disparaît. Colonne additive, défaut 0.
+  revisionTeam Int @default(0)
   // L'équipe a signalé qu'elle n'a (plus) de réclamation : quand toutes les
   // équipes actives ont répondu, la phase passe automatiquement au feedback.
   appealsDone Boolean @default(false)
@@ -351,6 +411,13 @@ model AdminSetting {
   tokenExpiresAt DateTime?
   syncIntervalMs Int       @default(5000)
   textOverrides  String    @default("{}")
+  // v3.0.0 — Domaine institutionnel des emails enseignants (modifiable
+  // par l'administrateur si l'établissement change de domaine).
+  teacherEmailDomain String @default("@famso.u-sousse.tn")
+  // v3.0.0 — Personnalisation de l'apparence : { primary, accent,
+  // background, logoIcon, teacherIcon, studentIcon } (JSON, couleurs
+  // #hex). "{}" = thème d'origine (vert émeraude).
+  theme          String    @default("{}")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 }
