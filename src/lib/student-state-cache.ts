@@ -18,10 +18,24 @@ import { computeAllFinalGrades, type StudentFinalResult } from '@/lib/final-resu
 //
 // MORCEAUX paresseux (built on demand, jamais pour rien) :
 //  - base   : questions, cas, équipes, étudiants, réponses d'appli-
-//             cation, tentatives tRAT par équipe, réclamations ;
+//             cation, réclamations ;
 //  - iratStats : statistiques iRAT (phase feedback seulement) ;
 //  - saiItems  : questionnaire de fin (phase finished seulement) ;
 //  - finals    : notes finales (finished + questionnaire soumis).
+//
+// v3.3.0 — CORRECTIF CRITIQUE (grattage tRAT bloqué) : les tentatives
+// tRAT ne vivent PLUS dans ce cache. Elles changent sous le compteur
+// de révision D'ÉQUIPE (bumpTeamRevision n'incrémente PAS la révision
+// globale — c'est le principe même du sondage allégé par équipe) ;
+// servies depuis l'entrée « révision globale », elles étaient PÉRIMÉES :
+// après un grattage, le rafraîchissement de l'étudiant renvoyait la
+// carte AVANT le grattage → son prochain envoi partait avec
+// expectedAttempt décalé → 409 « votre équipe vient de gratter une
+// autre tentative » → « Réessayer » rafraîchissait… la même entrée
+// périmée : boucle infinie, l'équipe ne pouvait plus gratter la 2ᵉ
+// case. Désormais /api/student relit les tentatives de SON équipe à
+// CHAQUE demande (une petite requête indexée, comme ses réponses
+// iRAT personnelles) : l'état est toujours exact.
 //
 // CLÉ = (sessionId, révision) : chaque écriture pertinente incrémente
 // la révision → l'entrée suivante est reconstruite automatiquement,
@@ -88,14 +102,6 @@ export interface MappedQuestion {
   caseId: string | null
 }
 
-export interface TratAnswerLite {
-  questionId: string
-  choice: number
-  attempt: number
-  isCorrect: boolean
-  score: number
-}
-
 export interface AppealLite {
   questionId: string
   text: string
@@ -133,7 +139,6 @@ export interface BaseState {
   teams: TeamLite[]
   activeTeamIds: string[]
   appAnswers: AppAnswerLite[]
-  tratByTeam: Map<string, TratAnswerLite[]>
   appealsByTeam: Map<string, AppealLite[]>
   openedCaseIds: Set<string>
   accessibleAppQuestionIds: string[]
@@ -175,7 +180,7 @@ export function finalsKey(sessionId: string, revision: number, revisionTeacher: 
 // ---------------- Construction des morceaux ----------------
 
 async function buildBase(sessionId: string, revealed: boolean): Promise<BaseState> {
-  const [ratQuestions, appQuestions, cases, students, teams, appAnswers, tratAnswers, appeals] =
+  const [ratQuestions, appQuestions, cases, students, teams, appAnswers, appeals] =
     await Promise.all([
       db.question.findMany({
         where: { sessionId, phase: 'rat' },
@@ -212,11 +217,6 @@ async function buildBase(sessionId: string, revealed: boolean): Promise<BaseStat
           team: { select: { name: true, number: true } },
         },
       }),
-      db.answer.findMany({
-        where: { kind: 'trat', question: { sessionId, phase: 'rat' } },
-        orderBy: { attempt: 'asc' },
-        select: { teamId: true, questionId: true, choice: true, attempt: true, isCorrect: true, score: true },
-      }),
       db.appeal.findMany({
         where: { sessionId },
         select: { teamId: true, questionId: true, text: true, status: true },
@@ -248,19 +248,9 @@ async function buildBase(sessionId: string, revealed: boolean): Promise<BaseStat
       })
 
   // Regroupements par équipe (une seule passe, complexité linéaire).
-  const tratByTeam = new Map<string, TratAnswerLite[]>()
-  for (const a of tratAnswers) {
-    if (!a.teamId) continue
-    const list = tratByTeam.get(a.teamId) ?? []
-    list.push({
-      questionId: a.questionId,
-      choice: a.choice,
-      attempt: a.attempt,
-      isCorrect: a.isCorrect,
-      score: a.score,
-    })
-    tratByTeam.set(a.teamId, list)
-  }
+  // (v3.3.0 : les tentatives tRAT ne sont plus ici — voir l'en-tête
+  // du fichier : elles appartiennent au compteur d'équipe, /api/student
+  // les relit à chaque demande.)
   const appealsByTeam = new Map<string, AppealLite[]>()
   for (const a of appeals) {
     const list = appealsByTeam.get(a.teamId) ?? []
@@ -309,7 +299,6 @@ async function buildBase(sessionId: string, revealed: boolean): Promise<BaseStat
     teams,
     activeTeamIds,
     appAnswers: mappedAppAnswers,
-    tratByTeam,
     appealsByTeam,
     openedCaseIds,
     accessibleAppQuestionIds,

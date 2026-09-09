@@ -176,8 +176,15 @@ export async function GET(req: NextRequest) {
 
     // ----- Données propres à l'étudiant (relues à chaque demande) -----
     // v3.0.0 : parallélisées avec la construction éventuelle du cache.
+    // v3.3.0 : les tentatives tRAT de SON ÉQUIPE sont relues ICI, à
+    // chaque demande — elles vivent sous le compteur de révision
+    // d'équipe (pas la révision globale) : les servir depuis le cache
+    // « révision globale » renvoyait une carte périmée après un
+    // grattage → expectedAttempt décalé → 409 en boucle (correctif du
+    // bug fatal « l'équipe ne peut plus gratter »). Une petite requête
+    // indexée par équipe, comme les réponses iRAT personnelles.
     const needPeer = status === 'peer' || status === 'finished'
-    const [myIratAnswers, myPeerEvals, receivedEvals] = await Promise.all([
+    const [myIratAnswers, myPeerEvals, receivedEvals, teamTratRows] = await Promise.all([
       db.answer.findMany({
         where: { studentId: student.id, kind: 'irat', question: { phase: 'rat' } },
         select: { questionId: true, choice: true, isCorrect: true, score: true },
@@ -194,10 +201,22 @@ export async function GET(req: NextRequest) {
             select: { score: true },
           })
         : Promise.resolve([]),
+      student.teamId
+        ? db.answer.findMany({
+            where: {
+              teamId: student.teamId,
+              kind: 'trat',
+              question: { sessionId: session.id, phase: 'rat' },
+            },
+            orderBy: { attempt: 'asc' },
+            select: { questionId: true, choice: true, attempt: true, isCorrect: true, score: true },
+          })
+        : Promise.resolve([]),
     ])
 
     const teamId = student.teamId
-    const teamTratAnswers = teamId ? (base.tratByTeam.get(teamId) ?? []) : []
+    // v3.3.0 — tentatives fraîches de l'équipe (voir plus haut).
+    const teamTratAnswers = teamTratRows
     const myAppeals = teamId ? (base.appealsByTeam.get(teamId) ?? []) : []
     const accessibleQIds = new Set(base.accessibleAppQuestionIds)
     const teamAppAnswers = teamId

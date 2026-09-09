@@ -145,6 +145,9 @@ export interface DashboardDTO {
    *  (capture d'écran suspectée sur PC, sortie de l'application pendant un
    *  test). Des SUSPICIONS à interpréter, jamais des preuves. */
   alerts?: SessionAlertDTO[]
+  /** v3.3.0 : journal des modifications enseignantes (150 dernières
+   *  entrées, la plus récente d'abord) — rubrique « Journal ». */
+  journal?: JournalEntryDTO[]
 }
 
 export interface SessionAlertDTO {
@@ -158,6 +161,22 @@ export interface SessionAlertDTO {
    *  séance — 'irat', 'trat', 'application'…). NULL = hors épreuve connue
    *  ou signalement antérieur à la v2.5.1 → « Autres moments ». */
   phase: string | null
+  createdAt: string
+}
+
+/** v3.3.0 — entrée du JOURNAL DES MODIFICATIONS ENSEIGNANTES (rubrique
+ * « Journal » du tableau de bord) : qui a changé quoi, quand, depuis
+ * quelle instance (local / en ligne). Le payload est structuré selon
+ * le type (voir write-queue.ts) — jamais de secret dedans. */
+export interface JournalEntryDTO {
+  /** Numéro d'événement dans la séance (ordre croissant). */
+  sequence: number
+  type: string
+  /** Payload parsé : { action?, detail?, actor?, actorEmail?, from?,
+   *  to?, status?, erasedAnswers?… } selon le type. */
+  payload: Record<string, unknown>
+  /** 'local' (PC de l'enseignant) ou 'online' (version en ligne). */
+  origin: string
   createdAt: string
 }
 

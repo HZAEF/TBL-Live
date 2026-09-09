@@ -18,22 +18,94 @@ import { isTrashExpired } from '@/lib/session-lifecycle'
 import { SAI_SUBSCALES, DEFAULT_SAI_ITEMS } from '@/lib/sai'
 import { buildSyncBackup, syncNow, normalizeRemoteUrl, SyncError } from '@/lib/sync'
 import { bumpRevisions } from '@/lib/revision'
-import { withSessionWrite, recordSessionEvent, eventOriginFromHeader } from '@/lib/write-queue'
+import {
+  withSessionWrite,
+  recordSessionEvent,
+  eventOriginFromHeader,
+  safeEventPayload,
+  type SessionEventType,
+} from '@/lib/write-queue'
 import { requireTeacher } from '@/lib/teacher-auth'
 import { checkShareEmail, isSessionVisibleTo, MAX_COLLABORATORS } from '@/lib/sharing'
 
-/** v3.1.0 — Valide le JSON stocké d'un payload d'événement (jamais
- *  de secret dedans par construction) ; '{}' si illisible. */
-function safeEventPayload(raw: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    // JSON illisible : payload vide
+// v3.3.0 — JOURNAL DES MODIFICATIONS ENSEIGNANTES (rubrique « Journal »
+// du tableau de bord) : chaque action qui MODIFIE la séance est
+// consignée avec son auteur (compte enseignant connecté, si identifiable)
+// et l'origine local/en ligne — pour la collaboration entre le
+// propriétaire et les invités d'une séance partagée.
+//
+// MAPPING action → type d'événement (les quatre actions historiques —
+// set_phase, open_case, toggle_reveal, resolve_appeal — ont déjà LEURS
+// événements détaillés : pas d'événement générique pour elles).
+const JOURNAL_TYPE: Record<string, SessionEventType> = {
+  launch_feedback: 'session_edit',
+  set_title: 'session_edit',
+  set_pin: 'session_edit',
+  set_irat_minutes: 'session_edit',
+  add_question: 'question_edit',
+  update_question: 'question_edit',
+  move_question: 'question_edit',
+  shuffle_quiz: 'question_edit',
+  delete_question: 'question_edit',
+  add_case: 'session_edit',
+  update_case: 'session_edit',
+  delete_case: 'session_edit',
+  set_team_count: 'team_edit',
+  rename_team: 'team_edit',
+  move_student: 'team_edit',
+  auto_assign: 'team_edit',
+  remove_student: 'team_edit',
+  sai_update_item: 'session_edit',
+  sai_add_item: 'session_edit',
+  sai_delete_item: 'session_edit',
+  sai_reset: 'session_edit',
+  delete_session: 'session_edit',
+  restore_session: 'session_edit',
+  delete_forever: 'session_edit',
+  duplicate_session: 'session_edit',
+  share_session: 'share',
+  unshare_session: 'share',
+  restart_session: 'restart',
+}
+
+/** Détail lisible du journal, dérivé du CORPS de la requête (aucune
+ * lecture supplémentaire en base — les détails exigeant l'état AVANT
+ * modification sont remplis par les blocs d'action eux-mêmes via
+ * l'objet `journal` mutable passé à runManageAction). */
+function journalDetailFromBody(action: string, body: Record<string, unknown>): string | undefined {
+  const text = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 90) : undefined)
+  switch (action) {
+    case 'set_title':
+      return text(body.title)
+    case 'set_irat_minutes':
+      return typeof body.minutes === 'number' ? `${body.minutes} min` : undefined
+    case 'add_question':
+    case 'update_question':
+      return text((body.question as { text?: unknown } | undefined)?.text)
+    case 'add_case':
+    case 'update_case':
+      return text(body.title)
+    case 'set_team_count':
+      return typeof body.count === 'number' ? `${body.count}` : undefined
+    case 'rename_team':
+      return text(body.name)
+    case 'share_session':
+    case 'unshare_session':
+      return text(body.email)
+    default:
+      return undefined
   }
-  return {}
+}
+
+/** Collecteur passé à runManageAction : les blocs d'action y déposent
+ * les détails que le corps de la requête ne contient pas (texte d'une
+ * question supprimée, nom d'un étudiant déplacé…), des champs
+ * structurés complémentaires (ex. compteurs du redémarrage), et
+ * peuvent poser `skip` pour un no-op (ex. partage en doublon). */
+interface JournalCollect {
+  detail?: string
+  extra?: Record<string, unknown>
+  skip?: boolean
 }
 
 // Renumérote les questions « libres » d'une phase (rat ou application,
@@ -288,12 +360,40 @@ export async function POST(
       'export_events',
     ])
     const origin = eventOriginFromHeader(req.headers.get('x-tbl-origin'))
+    // v3.3.0 — ACTEUR du journal (best-effort) : le compte enseignant
+    // connecté par cookie, si identifiable. Sans compte (reconnexion
+    // PIN sur une machine sans compte), l'auteur reste anonyme — le
+    // journal distingue alors les instances par l'origine local/en
+    // ligne. Aucune information de plus ne fuit : le nom/email de
+    // l'appelant est déjà visible du propriétaire (partage v3.2).
+    let actorName: string | null = null
+    let actorEmail: string | null = null
+    try {
+      const auth = await requireTeacher(req)
+      if (auth.ok) {
+        actorName = `${auth.teacher.firstName} ${auth.teacher.lastName}`.trim()
+        actorEmail = auth.teacher.email
+      }
+    } catch {
+      // pas de cookie de compte : acteur anonyme
+    }
+    // v3.3.0 — collecteur du journal : les blocs d'action y déposent
+    // les détails que le corps ne porte pas (et posent skip sur un
+    // no-op). Voir JournalCollect plus haut.
+    const journal: JournalCollect = {}
+    const actorPayload = { actor: actorName, actorEmail }
     let res: NextResponse
     if (READ_ONLY_ACTIONS.has(action)) {
-      res = await runManageAction(session, body as Record<string, unknown>, action, req)
+      res = await runManageAction(session, body as Record<string, unknown>, action, req, journal)
     } else {
       res = await withSessionWrite(session.id, 'manage', async () => {
-        const r = await runManageAction(session, body as Record<string, unknown>, action, req)
+        const r = await runManageAction(
+          session,
+          body as Record<string, unknown>,
+          action,
+          req,
+          journal
+        )
         // v2.9.0 — Sondage allégé : toute action qui MODIFIE la séance
         // incrémente les compteurs (étudiants + tableau de bord renouvellent
         // leur état au prochain sondage). Sont exclues les actions de pure
@@ -309,6 +409,9 @@ export async function POST(
     // v3.1.0 — Journal d'événements pour les transitions clés (sync
     // delta future) : changements de phase, ouverture de cas,
     // révélation forcée, décision sur réclamation.
+    // v3.3.0 — + l'ACTEUR dans le payload, et un événement générique
+    // pour TOUTES les autres actions de modification (rubrique
+    // « Journal » du tableau de bord — collaboration entre enseignants).
     if (res.status >= 200 && res.status < 300) {
       if (action === 'set_phase') {
         const phase = body.phase as string
@@ -317,21 +420,27 @@ export async function POST(
             session.id,
             'phase',
             null,
-            { from: session.status, to: phase },
+            { from: session.status, to: phase, ...actorPayload },
             origin
           )
         }
       } else if (action === 'open_case') {
         const caseId = typeof body.caseId === 'string' ? body.caseId : null
         if (caseId) {
-          await recordSessionEvent(session.id, 'case_open', caseId, {}, origin)
+          await recordSessionEvent(
+            session.id,
+            'case_open',
+            caseId,
+            { ...actorPayload },
+            origin
+          )
         }
       } else if (action === 'toggle_reveal' && Boolean(body.revealed)) {
         await recordSessionEvent(
           session.id,
           'reveal',
           null,
-          { forced: true },
+          { forced: true, ...actorPayload },
           origin
         )
       } else if (action === 'resolve_appeal') {
@@ -339,7 +448,19 @@ export async function POST(
           session.id,
           'appeal_decision',
           typeof body.id === 'string' ? body.id : null,
-          { status: body.status },
+          { status: body.status, ...actorPayload },
+          origin
+        )
+      } else if (JOURNAL_TYPE[action] && !journal.skip) {
+        // v3.3.0 — événement générique : { action, détail?, acteur }.
+        // Le détail vient du bloc d'action (journal.detail) s'il l'a
+        // rempli, sinon du corps de la requête.
+        const detail = journal.detail ?? journalDetailFromBody(action, body as Record<string, unknown>)
+        await recordSessionEvent(
+          session.id,
+          JOURNAL_TYPE[action],
+          null,
+          { action, detail, ...actorPayload, ...(journal.extra ?? {}) },
           origin
         )
       }
@@ -357,12 +478,15 @@ export async function POST(
 // révision restent dans POST.
 // v3.2.0 — req est transmis (duplicate_session et le partage ont
 // besoin du COOKIE de compte enseignant pour identifier l'appelant).
+// v3.3.0 — journal est le collecteur du journal de modifications
+// (détails propres à l'action, skip sur no-op) — voir plus haut.
 // ------------------------------------------------------------
 async function runManageAction(
   session: Session,
   body: Record<string, unknown>,
   action: string,
-  req: NextRequest
+  req: NextRequest,
+  journal: JournalCollect
 ): Promise<NextResponse> {
     switch (action) {
       case 'set_phase': {
@@ -724,6 +848,8 @@ async function runManageAction(
         if (!existing) {
           return NextResponse.json({ error: 'Question introuvable.' }, { status: 404 })
         }
+        // v3.3.0 — le texte part au journal AVANT la suppression.
+        journal.detail = existing.text.slice(0, 90)
         await db.question.delete({ where: { id } })
         // Renumérotation : dans le cas si la question appartenait à un cas,
         // sinon dans la liste libre de la phase (ordres consécutifs 0,1,2…)
@@ -783,6 +909,8 @@ async function runManageAction(
         if (!existing) {
           return NextResponse.json({ error: 'Cas clinique introuvable.' }, { status: 404 })
         }
+        // v3.3.0 — le titre part au journal AVANT la suppression.
+        journal.detail = existing.title.slice(0, 90)
         // La suppression du cas supprime aussi ses QCU (et leurs réponses,
         // par cascade) après confirmation côté client.
         await db.case.delete({ where: { id } })
@@ -860,12 +988,16 @@ async function runManageAction(
         if (!student) {
           return NextResponse.json({ error: 'Étudiant introuvable.' }, { status: 404 })
         }
+        let teamName: string | null = null
         if (teamId) {
           const team = await db.team.findFirst({ where: { id: teamId, sessionId: session.id } })
           if (!team) {
             return NextResponse.json({ error: 'Équipe introuvable.' }, { status: 404 })
           }
+          teamName = team.name
         }
+        // v3.3.0 — nom de l'étudiant (et équipe cible) pour le journal.
+        journal.detail = teamName ? `${student.name} → ${teamName}` : student.name
         await db.student.update({
           where: { id: studentId },
           data: { teamId: teamId || null },
@@ -917,6 +1049,8 @@ async function runManageAction(
         if (!student) {
           return NextResponse.json({ error: 'Étudiant introuvable.' }, { status: 404 })
         }
+        // v3.3.0 — nom de l'étudiant exclu pour le journal.
+        journal.detail = student.name
         await db.student.delete({ where: { id: studentId } })
         return NextResponse.json({ ok: true })
       }
@@ -1110,6 +1244,7 @@ async function runManageAction(
 
       case 'restore_session': {
         if (!session.deletedAt) {
+          journal.skip = true // no-op : rien à restaurer, rien au journal
           return NextResponse.json({ ok: true }) // rien à restaurer
         }
         if (isTrashExpired(session.deletedAt)) {
@@ -1132,6 +1267,73 @@ async function runManageAction(
         // Suppression DÉFINITIVE et immédiate (tout est en cascade).
         await db.session.delete({ where: { id: session.id } })
         return NextResponse.json({ ok: true })
+      }
+
+      // ------------------------------------------------------------
+      // v3.3.0 — REDÉMARRAGE DE LA SÉANCE (demande de l'enseignante :
+      // « toutes les réponses enregistrées du TBL seront effacées et
+      // tous les étudiants seront à l'accueil et vont attendre que
+      // l'enseignant lance l'iRAT pour y répondre de nouveau »).
+      //
+      // Effacé : réponses iRAT + tRAT, réponses d'application,
+      // réclamations, évaluations par les pairs, questionnaire TBL-SAI
+      // (réponses + commentaires + dates de soumission).
+      // Conservé : questions et cas cliniques (la banque de la séance),
+      // équipes, étudiants INSCRITS (jetons valides — personne ne
+      // rejoint, personne n'est exclu), partage, signalements.
+      // La séance repasse à l'ACCUEIL (lobby) ; l'incrément de révision
+      // fait retomber tous les écrans étudiants sur l'attente.
+      // Idempotent : rejouer sur une séance déjà redémarrée efface 0
+      // ligne et renvoie les mêmes compteurs (à zéro).
+      // ------------------------------------------------------------
+      case 'restart_session': {
+        const [answers, appAnswers, appeals, peerEvals, saiResponses] = await Promise.all([
+          db.answer.deleteMany({ where: { question: { sessionId: session.id } } }),
+          db.appAnswer.deleteMany({ where: { team: { sessionId: session.id } } }),
+          db.appeal.deleteMany({ where: { sessionId: session.id } }),
+          db.peerEval.deleteMany({ where: { sessionId: session.id } }),
+          db.saiResponse.deleteMany({ where: { student: { sessionId: session.id } } }),
+        ])
+        await db.student.updateMany({
+          where: { sessionId: session.id },
+          data: { saiCompletedAt: null, saiComment: null },
+        })
+        await db.team.updateMany({
+          where: { sessionId: session.id },
+          data: { appealsDone: false },
+        })
+        await db.case.updateMany({
+          where: { sessionId: session.id },
+          data: { opened: false },
+        })
+        await db.session.update({
+          where: { id: session.id },
+          data: {
+            status: 'lobby',
+            phaseStartedAt: new Date(),
+            revealed: false,
+            feedbackReady: false,
+          },
+        })
+        // Journal : compteurs structurés (l'interface les met en forme
+        // et les traduit — jamais de texte figé côté serveur).
+        journal.extra = {
+          erasedAnswers: answers.count,
+          erasedAppAnswers: appAnswers.count,
+          erasedAppeals: appeals.count,
+          erasedPeerEvals: peerEvals.count,
+          erasedSaiResponses: saiResponses.count,
+        }
+        return NextResponse.json({
+          ok: true,
+          erased: {
+            answers: answers.count,
+            appAnswers: appAnswers.count,
+            appeals: appeals.count,
+            peerEvals: peerEvals.count,
+            saiResponses: saiResponses.count,
+          },
+        })
       }
 
       case 'duplicate_session': {
@@ -1326,6 +1528,7 @@ async function runManageAction(
           select: { id: true },
         })
         if (existing) {
+          journal.skip = true // doublon : aucun changement, pas de journal
           return NextResponse.json({ ok: true, duplicate: true, email, hasAccount: null, name: null })
         }
         const count = await db.sessionCollaborator.count({ where: { sessionId: session.id } })

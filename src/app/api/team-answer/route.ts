@@ -13,20 +13,25 @@ const TRAT_POINTS = [4, 2, 1, 0]
 // piège que la contrainte unique ne couvre pas seule — après un
 // TIMEOUT réseau, un réessai naïf recalculerait « tentative suivante »
 // et gratterait une DEUXIÈME case pour le même choix (l'équipe perdrait
-// des points). Le client envoie donc désormais expectedAttempt = le
-// nombre de tentatives qu'il a VUES (son état). Trois cas :
-//  1. expectedAttempt === nombre serveur → déroulé normal (nouvelle
-//     tentative) ; un double-clic vraiment simultané reste rattrapé
-//     par la contrainte @@unique([teamId, questionId, kind, attempt])
-//     → on relit la tentative enregistrée et on la RENVOIE telle
-//     quelle (même résultat, jamais d'erreur) ;
-//  2. expectedAttempt < nombre serveur (un coéquipier a répondu
-//     entre-temps, ou le réessai tombe après un enregistrement réussi)
-//     → on NE CRÉE RIEN : réponse { ok, syncNeeded } → le client
-//     rafraîchit son état et voit la carte à jour ;
-//  3. expectedAttempt > nombre serveur (état périmé improbable) →
-//     ignoré, déroulé normal.
-// Résultat : POST → timeout → retry renvoie toujours un état cohérent.
+// des points). Le client envoie donc expectedAttempt = le nombre de
+// tentatives qu'il a VUES (son état).
+//
+// v3.3.0 — CORRECTIF DU BUG FATAL « l'équipe ne peut plus gratter » :
+// un client périmé (écran pas encore rafraîchi, coéquipier plus rapide,
+// ou rafraîchissement servi depuis un cache d'état périmé — corrigé
+// par ailleurs) envoyait expectedAttempt < nombre serveur et recevait
+// 409 « behind » à CHAQUE tentative → boucle « envoi refusé / rien ne
+// marche ». Désormais, quand le client est en retard :
+//  a) son choix correspond à une tentative DÉJÀ enregistrée → on
+//     renvoie le résultat de CETTE tentative (un réessai après timeout
+//     ne peut JAMAIS re-gratter une case déjà ouverte — l'anti-double-
+//     grattage v3.1 est conservé) ;
+//  b) son choix est NOUVEAU (case encore fermée) → c'est un grattage
+//     délibéré de l'équipe : on l'ACCEPTE comme tentative suivante au
+//     barème réel — l'écran d'un membre ne bloque plus l'équipe.
+// Le 409 « behind » ne survient plus que sur la vraie course à double
+// insertion simultanée (contrainte unique P2002) : l'écran se
+// resynchronise alors d'un cycle.
 async function doPOST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null)
@@ -127,17 +132,29 @@ async function doPOST(req: NextRequest) {
         if (previous.length >= 4) {
           return { kind: 'sync', reason: 'exhausted' }
         }
-        // Le client a vu MOINS de tentatives que le serveur : un coéquipier
-        // (ou son propre envoi réussi mais timeout) a déjà gratté la case.
-        // On ne crée RIEN — l'état du client se resynchronise.
-        // NB : expectedAttempt=0 (client n'a rien vu) avec previous ≥ 1
-        // est LE cas du réessai après timeout — il doit être 'behind'.
+        // v3.3.0 — CLIENT EN RETARD (expectedAttempt < tentatives
+        // serveur) : voir l'en-tête du fichier. Un choix DÉJÀ gratté
+        // → on renvoie son résultat (jamais de re-grattage) ; un choix
+        // NOUVEAU → on continue vers la création de la tentative
+        // suivante (l'écran périmé d'un membre ne bloque plus son
+        // équipe — c'était le cœur du bug fatal signalé).
         if (
           Number.isInteger(expectedAttempt) &&
           expectedAttempt >= 0 &&
           expectedAttempt < previous.length
         ) {
-          return { kind: 'sync', reason: 'behind' }
+          const already = previous.find((a) => a.choice === choice)
+          if (already) {
+            return {
+              kind: 'result',
+              attempt: already.attempt,
+              isCorrect: already.isCorrect,
+              score: already.score,
+              pointsIfCorrect: 0,
+              duplicate: true,
+            }
+          }
+          // choix nouveau : chute volontaire vers la tentative suivante
         }
         const attempt = previous.length + 1
         const isCorrect = choice === question.correct

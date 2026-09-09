@@ -224,7 +224,7 @@ export function TratQuiz({
     )
   }
 
-  const submit = async (choiceOverride?: number) => {
+  const submit = async (choiceOverride?: number, expectedOverride?: number) => {
     const choice = choiceOverride ?? selected
     if (choice === null) return
     lastChoiceRef.current = choice
@@ -245,7 +245,11 @@ export function TratQuiz({
             // v3.1.0 — tentatives connues du client (garde-fou anti-
             // double-grattage après timeout / clic concurrent d'un
             // coéquipier) ; le serveur renvoie l'état réel sinon.
-            expectedAttempt: attempts.length,
+            // v3.3.0 : expectedOverride permet au « Réessayer » de
+            // repartir du numéro FRAIS (lu dans la réponse du
+            // rafraîchissement) — la closure de submit n'est plus
+            // prisonnière d'un état périmé.
+            expectedAttempt: expectedOverride ?? attempts.length,
           }),
         }),
       {
@@ -267,11 +271,32 @@ export function TratQuiz({
     setSelected(null)
   }
   const retry = () => {
-    // syncNeeded : un coéquipier a déjà gratté cette case — on rafraîchit
-    // l'état au lieu de renvoyer (l'écran se met à jour tout seul).
+    // v3.3.0 — syncNeeded : l'état de l'équipe a AVANCÉ sans que cet
+    // envoi soit enregistré (coéquipier plus rapide / double insertion
+    // simultanée). On rafraîchit, PUIS — si la réponse envisagée reste
+    // grattable — on la RENVOIE automatiquement avec le numéro de
+    // tentative À JOUR lu dans la réponse : « Réessayer » termine
+    // vraiment l'action au lieu de boucler sur « envoi refusé »
+    // (c'était la seconde moitié du bug fatal signalé).
     if (submitState.phase.state === 'failed' && submitState.phase.syncNeeded) {
-      void refresh()
-      submitState.reset()
+      const choice = lastChoiceRef.current
+      const questionId = q?.id
+      void (async () => {
+        const fresh = await refresh()
+        if (choice === null || !questionId) return
+        const d = fresh as StudentStateDTO | null
+        if (!d) return // réseau encore coupé : l'échec reste affiché, re-cliquable
+        const attemptsNow = (d.teamTratAnswers ?? []).filter((a) => a.questionId === questionId)
+        if (
+          attemptsNow.some((a) => a.isCorrect) ||
+          attemptsNow.some((a) => a.choice === choice) ||
+          attemptsNow.length >= 4
+        ) {
+          submitState.reset() // la case est déjà ouverte : le rafraîchi suffit
+          return
+        }
+        void submit(choice, attemptsNow.length)
+      })()
       return
     }
     void submit(lastChoiceRef.current ?? undefined)
@@ -1260,6 +1285,14 @@ function AppQuestionCard({
 
 // ================= Évaluation par les pairs =================
 
+// v3.3.0 — UN SEUL PASSAGE PAR PAIR (demande de l'enseignante) : dès
+// qu'un coéquipier a reçu SA note, il DISPARAÎT de l'écran de
+// l'évaluateur — la rubrique se vide au fur et à mesure, jusqu'à la
+// carte « terminé ». Le bouton « Mettre à jour mes évaluations » est
+// supprimé (plus de mise à jour possible : un pair noté n'est plus
+// proposé). Un coéquipier qui rejoint l'équipe APRÈS un envoi
+// réapparaît lui (il n'a pas encore été noté) — l'évaluateur peut
+// alors le noter sans toucher aux autres.
 export function PeerView({
   data,
   refresh,
@@ -1272,30 +1305,15 @@ export function PeerView({
   const { toast } = useToast()
   const { t } = useI18n()
   const teammates = data.teamMembers.filter((m) => m.id !== data.me.id)
+  // v3.3.0 — déjà notés par CET évaluateur → retirés de l'écran.
+  const evaluatedIds = new Set((data.myPeerEvals ?? []).map((e) => e.evaluatedId))
+  const pending = teammates.filter((m) => !evaluatedIds.has(m.id))
   const [scores, setScores] = useState<Record<string, number>>({})
   const [comments, setComments] = useState<Record<string, string>>({})
-  const [submitted, setSubmitted] = useState(false)
   // v3.1.0 — état d'envoi explicite + réessai (l'upsert par (évaluateur,
   // évalué) est idempotent : renvoyer les mêmes notes ne crée rien).
   const submitState = useSubmitState()
   const submitting = submitState.phase.state === 'sending'
-
-  useEffect(() => {
-    const init: Record<string, number> = {}
-    const initComments: Record<string, string> = {}
-    for (const m of teammates) {
-      const existing = data.myPeerEvals?.find((e) => e.evaluatedId === m.id)
-      if (existing && scores[m.id] === undefined) init[m.id] = existing.score
-      if (existing?.comment && comments[m.id] === undefined) initComments[m.id] = existing.comment
-    }
-    if (Object.keys(init).length) setScores((s) => ({ ...init, ...s }))
-    if (Object.keys(initComments).length) setComments((c) => ({ ...initComments, ...c }))
-    // Dépendance volontairement limitée à myPeerEvals : `teammates` est un
-    // tableau recréé à chaque rafraîchissement (2,5 s) ; l'inclure ferait
-    // tourner cette initialisation en boucle. scores/comments ne sont lus
-    // que pour éviter d'écraser une saisie en cours.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.myPeerEvals])
 
   if (teammates.length === 0) {
     return (
@@ -1307,8 +1325,26 @@ export function PeerView({
     )
   }
 
+  if (pending.length === 0) {
+    // v3.3.0 — tous les coéquipiers ont été notés : carte de fin (plus
+    // de bouton de mise à jour — la rubrique est terminée).
+    return (
+      <div className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-6 text-center">
+        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-white">
+          <Check className="h-7 w-7" />
+        </span>
+        <p className="mt-3 text-lg font-bold text-emerald-900">
+          {t('Évaluations envoyées — merci !')}
+        </p>
+        <p className="mt-1 text-sm text-emerald-800">
+          {t('Vous avez noté chacun de vos coéquipiers. Attendez la fin de cette étape.')}
+        </p>
+      </div>
+    )
+  }
+
   const submit = async () => {
-    const missing = teammates.filter((m) => scores[m.id] === undefined)
+    const missing = pending.filter((m) => scores[m.id] === undefined)
     if (missing.length > 0) {
       toast({
         title: t('Notes incomplètes'),
@@ -1322,12 +1358,14 @@ export function PeerView({
     // v3.1.0 — état d'envoi explicite : la confirmation « envoyées »
     // n'apparaît qu'après la réponse du serveur ; en cas d'échec,
     // message + RÉESSAI (upsert idempotent par (évaluateur, évalué)).
+    // v3.3.0 — seuls les pairs PAS ENCORE NOTÉS sont envoyés : les
+    // notes déjà enregistrées ne sont jamais réécrites.
     const result = await submitState.run(() =>
       api<{ ok: boolean }>('/api/peer', {
         method: 'POST',
         body: JSON.stringify({
           token,
-          evaluations: teammates.map((m) => ({
+          evaluations: pending.map((m) => ({
             evaluatedId: m.id,
             score: scores[m.id],
             comment: comments[m.id] ?? '',
@@ -1336,9 +1374,14 @@ export function PeerView({
       })
     )
     if (result !== null) {
-      setSubmitted(true)
-      toast({ title: t('Évaluations envoyées'), description: t('Merci pour votre honnêteté !') })
+      toast({
+        title: t('Évaluations envoyées'),
+        description: t('Merci pour votre honnêteté !'),
+      })
+      // Les pairs notés disparaissent au rafraîchissement.
       await refresh()
+      setScores({})
+      setComments({})
     }
   }
 
@@ -1350,7 +1393,7 @@ export function PeerView({
         )}
       </InfoCard>
 
-      {teammates.map((m) => (
+      {pending.map((m) => (
         <div key={m.id} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm">
           <p className="font-bold text-stone-900">{m.name}</p>
           <div className="mt-2 flex gap-2">
@@ -1389,20 +1432,10 @@ export function PeerView({
         disabled={submitting}
         onClick={() => submit()}
       >
-        {submitting
-          ? t('Envoi…')
-          : submitted
-            ? t('Mettre à jour mes évaluations')
-            : t('Envoyer mes évaluations')}
+        {submitting ? t('Envoi…') : t('Envoyer mes évaluations')}
       </Button>
       {submitState.phase.state !== 'idle' && (
         <SubmitStatus phase={submitState.phase} onRetry={() => submit()} />
-      )}
-      {submitted && submitState.phase.state !== 'failed' && (
-        <p className="text-center text-sm font-medium text-emerald-700">
-          <Check className="mr-1 inline h-4 w-4" />
-          {t('Évaluations enregistrées. Vous pouvez encore les ajuster.')}
-        </p>
       )}
     </div>
   )

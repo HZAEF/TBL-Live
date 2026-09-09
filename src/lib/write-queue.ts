@@ -118,6 +118,16 @@ export type SessionEventType =
   | 'case_open'
   | 'reveal'
   | 'appeal_decision'
+  // v3.3.0 — journal des modifications ENSEIGNANTES (rubrique
+  // « Journal » du tableau de bord : qui a changé quoi, quand — pour
+  // la collaboration entre propriétaire et invités d'une séance
+  // partagée). Le payload porte { action, detail?, actor?,
+  // actorEmail? } — jamais de secret.
+  | 'question_edit'
+  | 'team_edit'
+  | 'session_edit'
+  | 'share'
+  | 'restart'
 
 const EVENT_TYPES: ReadonlySet<string> = new Set<SessionEventType>([
   'join',
@@ -132,7 +142,44 @@ const EVENT_TYPES: ReadonlySet<string> = new Set<SessionEventType>([
   'case_open',
   'reveal',
   'appeal_decision',
+  'question_edit',
+  'team_edit',
+  'session_edit',
+  'share',
+  'restart',
 ])
+
+/** v3.3.0 — Types d'événements de type « ACTION ENSEIGNANTE » : la
+ * rubrique Journal du tableau de bord ne liste QUE ces entrées (les
+ * événements étudiants — réponses, inscriptions… — restent dans le
+ * journal complet, via export_events). */
+export const TEACHER_EVENT_TYPES: readonly string[] = [
+  'phase',
+  'case_open',
+  'reveal',
+  'appeal_decision',
+  'question_edit',
+  'team_edit',
+  'session_edit',
+  'share',
+  'restart',
+]
+
+/** v3.3.0 — Valide le JSON stocké d'un payload d'événement (jamais
+ * de secret dedans par construction) ; '{}' si illisible. Partagé
+ * par les routes manage (export_events) et dashboard (rubrique
+ * Journal). */
+export function safeEventPayload(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // JSON illisible : payload vide
+  }
+  return {}
+}
 
 // v3.2.0 — ROTATION DU JOURNAL (audit point n°6) : une séance TBL très
 // active (150 étudiants, réponses + retries + événements de phase)

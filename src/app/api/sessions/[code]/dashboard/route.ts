@@ -5,6 +5,7 @@ import { getSessionByCode, parseChoices, extractToken, safeEqualStrings } from '
 import { applyLifecycle } from '@/lib/session-lifecycle'
 import { readRevParam } from '@/lib/revision'
 import { listCollaboratorsDetailed } from '@/lib/sharing'
+import { safeEventPayload, TEACHER_EVENT_TYPES } from '@/lib/write-queue'
 
 // GET /api/sessions/[code]/dashboard — données complètes du tableau de bord
 // enseignant. Jeton transmis par l'en-tête « Authorization: Bearer … » (les
@@ -53,7 +54,7 @@ async function doGET(
       })
     }
 
-    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments, saiDetailedResponses, collaborators, ownerAccount] =
+    const [questions, cases, teams, students, iratAnswers, tratAnswers, appeals, appAnswers, peerEvals, alertEvents, saiItems, saiResponses, saiComments, saiDetailedResponses, collaborators, ownerAccount, journalEvents] =
       await Promise.all([
         db.question.findMany({
           where: { sessionId: session.id },
@@ -167,6 +168,24 @@ async function doGET(
               select: { email: true, firstName: true, lastName: true },
             })
           : Promise.resolve(null),
+        // v3.3.0 — JOURNAL DES MODIFICATIONS ENSEIGNANTES : les 150
+        // dernières actions d'enseignant (phase, questions, équipes,
+        // réglages, partage, redémarrage…), la plus récente d'abord.
+        // Uniquement les types « action enseignante » (TEACHER_EVENT_
+        // TYPES) — le journal complet (y compris événements étudiants)
+        // reste disponible via export_events.
+        db.sessionEvent.findMany({
+          where: { sessionId: session.id, type: { in: [...TEACHER_EVENT_TYPES] } },
+          orderBy: { sequence: 'desc' },
+          take: 150,
+          select: {
+            sequence: true,
+            type: true,
+            payload: true,
+            origin: true,
+            createdAt: true,
+          },
+        }),
       ])
 
     // Questions RAT (iRAT + tRAT) en premier, exercices d'application ensuite —
@@ -259,6 +278,15 @@ async function doGET(
         kind: a.kind as 'screenshot' | 'tab_hidden',
         phase: a.phase,
         createdAt: a.createdAt,
+      })),
+      // v3.3.0 — journal des modifications enseignantes (rubrique
+      // « Journal ») : payload parsé et sécurisé, jamais de secret.
+      journal: journalEvents.map((ev) => ({
+        sequence: ev.sequence,
+        type: ev.type,
+        payload: safeEventPayload(ev.payload),
+        origin: ev.origin,
+        createdAt: ev.createdAt.toISOString(),
       })),
       // v2.6.0 — questionnaire TBL-SAI : items + agrégats par item +
       // commentaires. Les moyennes de sous-échelles sont calculées côté
